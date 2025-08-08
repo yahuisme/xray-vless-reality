@@ -91,7 +91,7 @@ display_result() {
     local public_key="$5"
     local shortid="$6"
     
-    local node_name="$(hostname)-X-reality"
+    local node_name="$(hostname)-reality"
     local vless_url_ip=$ip
     if [[ "$ip" =~ .*:.* ]]; then vless_url_ip="[${ip}]"; fi
     local vless_reality_url="vless://${p_uuid}@${vless_url_ip}:${p_port}?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&sni=${p_sni}&fp=chrome&pbk=${public_key}&sid=${shortid}&#${node_name}"
@@ -134,13 +134,13 @@ show_config() {
     
     # --- 修复：增加对私钥和公钥生成的健壮性检查 ---
     local private_key=$(jq -r '.inbounds[0].streamSettings.realitySettings.privateKey' $XRAY_CONFIG_FILE)
-    if [ -z "$private_key" ]; then
-        error "无法从配置文件中读取私钥！"
+    if [ -z "$private_key" ] || [ "$private_key" == "null" ]; then
+        error "无法从配置文件中读取私钥, 或私钥值为空！"
     fi
 
-    local public_key=$($XRAY_BIN_FILE x25519 -i <<< "$private_key" | awk '/Public key:/ {print $3}')
+    local public_key=$(echo -n "$private_key" | $XRAY_BIN_FILE x25519 -i | awk '/Public key:/ {print $3}')
     if [ -z "$public_key" ]; then
-        error "从私钥计算公钥失败！请检查Xray核心是否正常。"
+        error "从私钥计算公钥失败！请检查Xray核心是否正常, 或配置文件中私钥格式是否正确。"
     fi
     
     local ip
