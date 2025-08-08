@@ -2,7 +2,7 @@
 
 # =================================================================================================
 # Script:         Xray-Reality All-in-One Management Script
-# Version:        3.2 (Final Stable Release)
+# Version:        3.3 (Hardened Stable Release)
 # Author:         (Your Name/ID, based on Crazypeace's original script)
 # Description:    A comprehensive script to install, uninstall, update, and manage 
 #                 Xray with VLESS-Reality protocol. All known bugs fixed.
@@ -132,13 +132,18 @@ show_config() {
     local p_sni=$(jq -r '.inbounds[0].streamSettings.realitySettings.serverNames[0]' $XRAY_CONFIG_FILE)
     local shortid=$(jq -r '.inbounds[0].streamSettings.realitySettings.shortIds[0]' $XRAY_CONFIG_FILE)
     
-    # --- 修复：增加对私钥和公钥生成的健壮性检查 ---
+    # --- 最终修复：增加对私钥和公钥生成的最终健壮性检查 ---
     local private_key=$(jq -r '.inbounds[0].streamSettings.realitySettings.privateKey' $XRAY_CONFIG_FILE)
-    if [ -z "$private_key" ] || [ "$private_key" == "null" ]; then
-        error "无法从配置文件中读取私钥, 或私钥值为空！"
+    
+    # 检查读取到的值是否为空、为 "null" 字符串、或只包含空白字符
+    if [ -z "$private_key" ] || [ "$private_key" == "null" ] || [[ "$private_key" =~ ^[[:space:]]*$ ]]; then
+        error "无法从配置文件中读取有效的私钥, 值为空或无效！"
     fi
 
-    local public_key=$(echo -n "$private_key" | $XRAY_BIN_FILE x25519 -i | awk '/Public key:/ {print $3}')
+    # 在传递给 xray 命令前，强制清除所有空白字符，确保命令接收到干净的数据
+    local clean_private_key=$(echo -n "$private_key" | tr -d '[:space:]')
+    local public_key=$(echo -n "$clean_private_key" | $XRAY_BIN_FILE x25519 -i | awk '/Public key:/ {print $3}')
+    
     if [ -z "$public_key" ]; then
         error "从私钥计算公钥失败！请检查Xray核心是否正常, 或配置文件中私钥格式是否正确。"
     fi
@@ -295,7 +300,7 @@ install_dependencies() {
 }
 
 display_help() {
-    echo "Xray-Reality 一键管理脚本 V3.2"
+    echo "Xray-Reality 一键管理脚本 V3.3"
     echo "----------------------------------------"
     echo "用法: $0 [动作] [选项]"
     echo
@@ -360,7 +365,7 @@ IPv6=$(curl -6s -m 2 https://www.cloudflare.com/cdn-cgi/trace | grep -oP 'ip=\K.
 
 main_menu() {
     clear
-    echo "Xray-Reality 一键管理脚本 V3.2"
+    echo "Xray-Reality 一键管理脚本 V3.3"
     echo "----------------------------------------"
     if [ -f "$XRAY_BIN_FILE" ]; then
         echo -e "当前状态: $green已安装$none"
