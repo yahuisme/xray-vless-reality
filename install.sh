@@ -2,7 +2,7 @@
 
 # =================================================================================================
 # Script:         Xray-Reality All-in-One Management Script
-# Version:        2.1 (Final Release)
+# Version:        2.2 (Stable Release)
 # Author:         (Your Name/ID, based on Crazypeace's original script)
 # Description:    A comprehensive script to install, uninstall, update, and manage 
 #                 Xray with VLESS-Reality protocol. Supports both interactive menu 
@@ -98,11 +98,10 @@ display_result() {
     local p_sni="$3"
     local ip="$4"
     local p_netstack="$5"
+    local public_key="$6" # <-- 直接接收公钥
+    local shortid="$7"    # <-- 直接接收ShortID
     
-    local private_key=$(jq -r '.inbounds[0].streamSettings.realitySettings.privateKey' $XRAY_CONFIG_FILE)
-    local public_key=$(echo "$private_key" | xray x25519 -i | awk '/Public key:/ {print $3}')
-    local shortid=$(jq -r '.inbounds[0].streamSettings.realitySettings.shortIds[0]' $XRAY_CONFIG_FILE)
-    local node_name="$(hostname)-reality"
+    local node_name="$(hostname)-X-reality"
 
     clear
     echo "---------- Xray 安装成功! ----------"
@@ -114,8 +113,9 @@ display_result() {
     echo -e "$yellow 流控 (Flow) = ${cyan}xtls-rprx-vision${none}"
     echo -e "$yellow SNI = ${cyan}${p_sni}$none"
     echo -e "$yellow 指纹 (Fingerprint) = ${cyan}chrome${none}"
-    echo -e "$yellow 公钥 (PublicKey) = ${cyan}${public_key}$none"
-    echo -e "$yellow ShortId = ${cyan}${shortid}$none"
+    # --- 修改：直接使用传入的公钥变量 ---
+    echo -e "$yellow 公钥 (PublicKey) = ${cyan}${public_key}${none}"
+    echo -e "$yellow ShortId = ${cyan}${shortid}${none}"
     echo
     echo "---------- VLESS Reality URL ----------"
     local vless_url_ip=$ip
@@ -198,8 +198,10 @@ install_xray() {
     info "安装最新版本的 Xray-core..."
     bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
     
+    # --- 修改：一次性生成并捕获所有密钥信息 ---
     local keys=$(xray x25519)
     local private_key=$(echo "$keys" | awk '/Private key:/ {print $3}')
+    local public_key=$(echo "$keys" | awk '/Public key:/ {print $3}')
     local shortid="20220701"
 
     info "配置 /usr/local/etc/xray/config.json..."
@@ -239,43 +241,34 @@ install_xray() {
     }
 EOF
     restart_xray
-    display_result "$p_port" "$p_uuid" "$p_sni" "$ip" "$p_netstack"
+    # --- 修改：将所有需要的值作为参数传递 ---
+    display_result "$p_port" "$p_uuid" "$p_sni" "$ip" "$p_netstack" "$public_key" "$shortid"
 }
 
 # =================================================================================================
 # --- Pre-flight Checks & System Detection ---
 # =================================================================================================
 
-# --- Root权限检查 ---
 if [[ $(id -u) -ne 0 ]]; then
     error "此脚本需要以root用户权限运行。请尝试使用 'sudo -i' 或 'sudo su' 切换用户后执行。"
 fi
 
-# --- 操作系统检测 ---
 detect_os() {
     if [ -f /etc/os-release ]; then
         . /etc/os-release
         OS_ID=$ID
         case $ID in
-            debian|ubuntu)
-                PKG_MANAGER="apt-get"
-                ;;
+            debian|ubuntu) PKG_MANAGER="apt-get";;
             centos|rhel|fedora|almalinux|rocky)
                 PKG_MANAGER="yum"
-                if command -v dnf &>/dev/null; then
-                    PKG_MANAGER="dnf"
-                fi
-                ;;
-            *)
-                error "不支持的操作系统: $ID"
-                ;;
+                if command -v dnf &>/dev/null; then PKG_MANAGER="dnf"; fi;;
+            *) error "不支持的操作系统: $ID";;
         esac
     else
         error "无法检测到操作系统, /etc/os-release 文件不存在。"
     fi
 }
 
-# --- 依赖安装 ---
 install_dependencies() {
     info "正在检查并安装核心依赖..."
     if [[ "$PKG_MANAGER" == "apt-get" ]]; then
@@ -286,9 +279,8 @@ install_dependencies() {
     fi
 }
 
-# --- 帮助菜单 ---
 display_help() {
-    echo "Xray-Reality 一键管理脚本 V2.1"
+    echo "Xray-Reality 一键管理脚本 V2.2"
     echo "----------------------------------------"
     echo "用法: $0 [动作] [选项]"
     echo
@@ -304,18 +296,16 @@ display_help() {
     echo "  --netstack <4|6>     网络栈 (默认: 自动检测)。"
     echo "  --port <端口>        监听端口 (默认: 443)。"
     echo "  --uuid <UUID>        用户UUID (默认: 自动生成)。"
-    echo "  --sni <域名>         SNI域名 (默认: learn.microsoft.com)。" # <<<--- 已补全 ---<<<
+    echo "  --sni <域名>         SNI域名 (默认: learn.microsoft.com)。"
     echo
     echo "如果不带任何参数运行, 将显示交互式主菜单。"
     exit 0
 }
 
-
 # =================================================================================================
 # --- Main Execution Block ---
 # =================================================================================================
 
-# --- 参数解析 ---
 ACTION=""
 p_netstack=""
 p_port=""
@@ -334,7 +324,7 @@ if [[ $# -gt 0 ]]; then
                 --netstack) p_netstack="$2"; shift 2;;
                 --port) p_port="$2"; shift 2;;
                 --uuid) p_uuid="$2"; shift 2;;
-                --sni) p_sni="$2"; shift 2;; # <<<--- 已补全 ---<<<
+                --sni) p_sni="$2"; shift 2;;
                 *) error "安装时使用了未知选项: $1";;
               esac
             done
@@ -348,17 +338,13 @@ if [[ $# -gt 0 ]]; then
     esac
 fi
 
-
-# --- 环境准备 ---
 detect_os
 IPv4=$(curl -4s -m 2 https://www.cloudflare.com/cdn-cgi/trace | grep -oP 'ip=\K.*$')
 IPv6=$(curl -6s -m 2 https://www.cloudflare.com/cdn-cgi/trace | grep -oP 'ip=\K.*$')
 
-
-# --- 主菜单/动作分发 ---
 main_menu() {
     clear
-    echo "Xray-Reality 一键管理脚本 V2.1"
+    echo "Xray-Reality 一键管理脚本 V2.2"
     echo "----------------------------------------"
     if [ -f "$XRAY_BIN_FILE" ]; then
         echo -e "当前状态: $green已安装$none"
@@ -392,7 +378,6 @@ if [ "$IS_INTERACTIVE" = "true" ]; then
     main_menu
 fi
 
-# 根据 ACTION 执行最终操作
 case "$ACTION" in
     install) install_xray ;;
     uninstall) uninstall_script ;;
