@@ -2,7 +2,7 @@
 
 # =================================================================================================
 # Script:         Xray-Reality All-in-One Management Script
-# Version:        2.5 (Final Stable Release)
+# Version:        2.6 (Final Polished Release)
 # Author:         (Your Name/ID, based on Crazypeace's original script)
 # Description:    A comprehensive script to install, uninstall, update, and manage 
 #                 Xray with VLESS-Reality protocol. Supports both interactive menu 
@@ -93,7 +93,7 @@ display_result() {
     local shortid="$6"
     local p_no_qrcode="$7"
     
-    local node_name="$(hostname)-X-reality"
+    local node_name="$(hostname)-reality"
     local vless_url_ip=$ip
     if [[ "$ip" =~ .*:.* ]]; then vless_url_ip="[${ip}]"; fi
     local vless_reality_url="vless://${p_uuid}@${vless_url_ip}:${p_port}?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&sni=${p_sni}&fp=chrome&pbk=${public_key}&sid=${shortid}&#${node_name}"
@@ -117,8 +117,8 @@ display_result() {
 
     if [[ "$p_no_qrcode" != "true" ]]; then
         if command -v qrencode &>/dev/null; then
-            info "手机客户端扫描二维码 (请使用UTF-8编码的终端):"
-            qrencode -t ANSIUTF8 "$vless_reality_url"
+            info "手机客户端扫描二维码:"
+            qrencode -m 1 -t ANSI "$vless_reality_url"
         else
             warn "未找到 qrencode 命令, 无法生成二维码。请手动安装 (apt-get install qrencode / yum install qrencode)。"
         fi
@@ -150,7 +150,7 @@ show_config() {
     fi
     [ -z "$ip" ] && ip="<无法自动获取,请手动填写>"
 
-    display_result "$p_port" "$p_uuid" "$p_sni" "$ip" "$public_key" "$shortid" "false" # 默认显示二维码
+    display_result "$p_port" "$p_uuid" "$p_sni" "$ip" "$public_key" "$shortid" "false"
     exit 0
 }
 
@@ -257,7 +257,6 @@ EOF
 # =================================================================================================
 # --- Pre-flight Checks & System Detection ---
 # =================================================================================================
-
 if [[ $(id -u) -ne 0 ]]; then
     error "此脚本需要以root用户权限运行。请尝试使用 'sudo -i' 或 'sudo su' 切换用户后执行。"
 fi
@@ -300,7 +299,7 @@ install_dependencies() {
 }
 
 display_help() {
-    echo "Xray-Reality 一键管理脚本 V2.5"
+    echo "Xray-Reality 一键管理脚本 V2.6"
     echo "----------------------------------------"
     echo "用法: $0 [动作] [选项]"
     echo
@@ -327,7 +326,6 @@ display_help() {
 # =================================================================================================
 # --- Main Execution Block ---
 # =================================================================================================
-
 ACTION=""
 p_netstack=""
 p_port=""
@@ -369,7 +367,7 @@ IPv6=$(curl -6s -m 2 https://www.cloudflare.com/cdn-cgi/trace | grep -oP 'ip=\K.
 
 main_menu() {
     clear
-    echo "Xray-Reality 一键管理脚本 V2.5"
+    echo "Xray-Reality 一键管理脚本 V2.6"
     echo "----------------------------------------"
     if [ -f "$XRAY_BIN_FILE" ]; then
         echo -e "当前状态: $green已安装$none"
