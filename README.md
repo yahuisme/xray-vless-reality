@@ -10,23 +10,30 @@ apt update
 apt install -y curl
 ```
 ```
-bash <(curl -sL https://raw.githubusercontent.com/yahuisme/xray-vless-reality/refs/heads/main/install.sh)
+bash <(curl -sL https://raw.githubusercontent.com/yahuisme/xray-vless-reality/main/install.sh)
 ```
 
 # 客户端参数配置
 脚本最后会输出VLESS链接，方便你导入翻墙客户端。
 
-如果你是手搓VLESS链接，那么参考：https://github.com/XTLS/Xray-core/discussions/716
-如 `vless://${xray_id}@${ip}:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=${domain}&fp=${fingerprint}&pbk=${public_key}&type=tcp#VLESS_R_${ip}`
-
-# Uninstall
+# 更新
 ```
-bash <(curl -sL https://raw.githubusercontent.com/yahuisme/xray-vless-reality/refs/heads/main/install.sh) --uninstall
+bash <(curl -sL https://raw.githubusercontent.com/yahuisme/xray-vless-reality/main/install.sh) --update
+```
+
+# 重启
+```
+bash <(curl -sL https://raw.githubusercontent.com/yahuisme/xray-vless-reality/main/install.sh) --restart
+```
+
+# 卸载
+```
+bash <(curl -sL https://raw.githubusercontent.com/yahuisme/xray-vless-reality/main/install.sh) --uninstall
 ```
 
 # 脚本支持带参数运行
 ```
-bash <(curl -sL https://raw.githubusercontent.com/yahuisme/xray-vless-reality/refs/heads/main/install.sh) --port [port] --uuid [UUID] --sni [domain]
+bash <(curl -sL https://raw.githubusercontent.com/yahuisme/xray-vless-reality/main/install.sh) --install --port [port] --uuid [UUID] --sni [domain]
 ```
 
 其中
