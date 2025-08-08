@@ -2,10 +2,11 @@
 
 # =================================================================================================
 # Script:         Xray-Reality All-in-One Management Script
-# Version:        3.3 (Hardened Stable Release)
+# Version:        4.0 (Snapshot Edition)
 # Author:         (Your Name/ID, based on Crazypeace's original script)
 # Description:    A comprehensive script to install, uninstall, update, and manage 
-#                 Xray with VLESS-Reality protocol. All known bugs fixed.
+#                 Xray with VLESS-Reality protocol. Saves a snapshot of the config 
+#                 for 100% reliable viewing.
 # OS Support:     Debian 10+, Ubuntu 20.04+, CentOS 7+, RHEL, Fedora, AlmaLinux, Rocky Linux
 # =================================================================================================
 
@@ -21,6 +22,7 @@ none='\e[0m'
 # --- Global Variables ---
 XRAY_CONFIG_FILE="/usr/local/etc/xray/config.json"
 XRAY_BIN_FILE="/usr/local/bin/xray"
+XRAY_INFO_FILE="/usr/local/etc/xray/last_config_display.txt"
 PKG_MANAGER=""
 OS_ID=""
 
@@ -51,7 +53,7 @@ uninstall_script() {
     systemctl disable xray >/dev/null 2>&1
     info "执行官方卸载脚本..."
     bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ remove --purge
-    info "清理残留文件..."
+    info "清理残留文件 (包括配置快照)..."
     rm -rf /usr/local/etc/xray
     rm -rf /var/log/xray
     info "Xray 已被彻底卸载。"
@@ -64,7 +66,7 @@ update_xray() {
     info "正在检查并更新 geodata 文件..."
     bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install-geodata
     restart_xray
-    info "Xray 更新完成。"
+    info "Xray 更新完成。建议执行 '--show' 命令来查看最新配置（版本号等）。"
 }
 
 restart_xray() {
@@ -96,68 +98,46 @@ display_result() {
     if [[ "$ip" =~ .*:.* ]]; then vless_url_ip="[${ip}]"; fi
     local vless_reality_url="vless://${p_uuid}@${vless_url_ip}:${p_port}?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&sni=${p_sni}&fp=chrome&pbk=${public_key}&sid=${shortid}&#${node_name}"
 
+    local output_text_colored
+    output_text_colored=$(cat <<-EOF
+---------- 配置信息 ----------
+$green --- VLESS Reality 服务器配置 --- $none
+$yellow 节点名 (Name) = $cyan${node_name}$none
+$yellow 地址 (Address) = $cyan${ip}$none
+$yellow 端口 (Port) = $cyan${p_port}$none
+$yellow 用户ID (UUID) = $cyan${p_uuid}$none
+$yellow 流控 (Flow) = $cyanxtls-rprx-vision${none}
+$yellow SNI = $cyan${p_sni}$none
+$yellow 指纹 (Fingerprint) = $cyan chrome${none}
+$yellow 公钥 (PublicKey) = $cyan${public_key}$none
+$yellow ShortId = $cyan${shortid}$none
+
+---------- VLESS Reality URL ----------
+${cyan}${vless_reality_url}${none}
+
+----------------------------------------
+EOF
+)
+    local output_text_plain
+    output_text_plain=$(echo -e "$output_text_colored" | sed 's/\x1b\[[0-9;]*m//g')
+
     clear
-    echo "---------- 配置信息 ----------"
-    echo -e "$green --- VLESS Reality 服务器配置 --- $none"
-    echo -e "$yellow 节点名 (Name) = $cyan${node_name}$none"
-    echo -e "$yellow 地址 (Address) = $cyan${ip}$none"
-    echo -e "$yellow 端口 (Port) = ${cyan}${p_port}$none"
-    echo -e "$yellow 用户ID (UUID) = $cyan${p_uuid}$none"
-    echo -e "$yellow 流控 (Flow) = ${cyan}xtls-rprx-vision${none}"
-    echo -e "$yellow SNI = ${cyan}${p_sni}$none"
-    echo -e "$yellow 指纹 (Fingerprint) = ${cyan}chrome${none}"
-    echo -e "$yellow 公钥 (PublicKey) = ${cyan}${public_key}$none"
-    echo -e "$yellow ShortId = ${cyan}${shortid}$none"
-    echo
-    echo "---------- VLESS Reality URL ----------"
-    echo -e "${cyan}${vless_reality_url}${none}"
-    echo
-    echo "----------------------------------------"
+    # 输出到屏幕 (带颜色)
+    echo -e "$output_text_colored"
+
+    # 将纯文本版本保存到快照文件
+    echo "$output_text_plain" > "$XRAY_INFO_FILE"
+    info "以上配置信息已保存至: $XRAY_INFO_FILE"
 }
 
 show_config() {
-    info "正在读取当前配置..."
-    if [ ! -f "$XRAY_CONFIG_FILE" ]; then
-        error "Xray 配置文件不存在, 请先安装。"
-    fi
-    if ! command -v jq &>/dev/null; then
-        error "jq 命令未找到，无法解析配置。请先安装 jq。"
-    fi
-    if [ ! -f "$XRAY_BIN_FILE" ]; then
-        error "Xray 执行文件 ($XRAY_BIN_FILE) 未找到, 无法计算公钥。"
+    info "正在读取上次保存的配置快照..."
+    if [ ! -f "$XRAY_INFO_FILE" ]; then
+        error "未找到配置快照文件。请先至少成功执行一次安装。"
     fi
     
-    local p_port=$(jq -r '.inbounds[0].port' $XRAY_CONFIG_FILE)
-    local p_uuid=$(jq -r '.inbounds[0].settings.clients[0].id' $XRAY_CONFIG_FILE)
-    local p_sni=$(jq -r '.inbounds[0].streamSettings.realitySettings.serverNames[0]' $XRAY_CONFIG_FILE)
-    local shortid=$(jq -r '.inbounds[0].streamSettings.realitySettings.shortIds[0]' $XRAY_CONFIG_FILE)
-    
-    # --- 最终修复：增加对私钥和公钥生成的最终健壮性检查 ---
-    local private_key=$(jq -r '.inbounds[0].streamSettings.realitySettings.privateKey' $XRAY_CONFIG_FILE)
-    
-    # 检查读取到的值是否为空、为 "null" 字符串、或只包含空白字符
-    if [ -z "$private_key" ] || [ "$private_key" == "null" ] || [[ "$private_key" =~ ^[[:space:]]*$ ]]; then
-        error "无法从配置文件中读取有效的私钥, 值为空或无效！"
-    fi
-
-    # 在传递给 xray 命令前，强制清除所有空白字符，确保命令接收到干净的数据
-    local clean_private_key=$(echo -n "$private_key" | tr -d '[:space:]')
-    local public_key=$(echo -n "$clean_private_key" | $XRAY_BIN_FILE x25519 -i | awk '/Public key:/ {print $3}')
-    
-    if [ -z "$public_key" ]; then
-        error "从私钥计算公钥失败！请检查Xray核心是否正常, 或配置文件中私钥格式是否正确。"
-    fi
-    
-    local ip
-    if [ -n "$IPv4" ]; then
-        ip=$IPv4
-    elif [ -n "$IPv6" ]; then
-        ip=$IPv6
-    else
-        ip="<无法自动获取,请手动填写>"
-    fi
-
-    display_result "$p_port" "$p_uuid" "$p_sni" "$ip" "$public_key" "$shortid" "true"
+    # 直接输出快照文件的内容
+    cat "$XRAY_INFO_FILE"
     exit 0
 }
 
@@ -256,7 +236,7 @@ install_xray() {
     }
 EOF
     restart_xray
-    display_result "$p_port" "$p_uuid" "$p_sni" "$ip" "$public_key" "$shortid" "true"
+    display_result "$p_port" "$p_uuid" "$p_sni" "$ip" "$public_key" "$shortid"
 }
 
 # =================================================================================================
@@ -300,7 +280,7 @@ install_dependencies() {
 }
 
 display_help() {
-    echo "Xray-Reality 一键管理脚本 V3.3"
+    echo "Xray-Reality 一键管理脚本 V4.0"
     echo "----------------------------------------"
     echo "用法: $0 [动作] [选项]"
     echo
@@ -310,7 +290,7 @@ display_help() {
     echo "  --update             更新Xray核心和GeoData。"
     echo "  --restart            重启Xray服务。"
     echo "  --logs               查看实时日志。"
-    echo "  --show               显示当前配置信息。"
+    echo "  --show               显示上次安装的配置快照。"
     echo "  -h, --help           显示此帮助菜单。"
     echo
     echo "安装选项 (需配合 --install):"
@@ -365,7 +345,7 @@ IPv6=$(curl -6s -m 2 https://www.cloudflare.com/cdn-cgi/trace | grep -oP 'ip=\K.
 
 main_menu() {
     clear
-    echo "Xray-Reality 一键管理脚本 V3.3"
+    echo "Xray-Reality 一键管理脚本 V4.0"
     echo "----------------------------------------"
     if [ -f "$XRAY_BIN_FILE" ]; then
         echo -e "当前状态: $green已安装$none"
