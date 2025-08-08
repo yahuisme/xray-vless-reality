@@ -2,7 +2,7 @@
 
 # =================================================================================================
 # Script:         Xray-Reality All-in-One Management Script
-# Version:        2.3 (Stable Release with QR Code)
+# Version:        2.2 (Stable Release)
 # Author:         (Your Name/ID, based on Crazypeace's original script)
 # Description:    A comprehensive script to install, uninstall, update, and manage 
 #                 Xray with VLESS-Reality protocol. Supports both interactive menu 
@@ -98,11 +98,10 @@ display_result() {
     local p_sni="$3"
     local ip="$4"
     local p_netstack="$5"
-    local public_key="$6"
-    local shortid="$7"
-    local p_no_qrcode="$8" # <-- 接收是否显示二维码的标志
+    local public_key="$6" # <-- 直接接收公钥
+    local shortid="$7"    # <-- 直接接收ShortID
     
-    local node_name="$(hostname)-reality"
+    local node_name="$(hostname)-X-reality"
 
     clear
     echo "---------- Xray 安装成功! ----------"
@@ -114,8 +113,9 @@ display_result() {
     echo -e "$yellow 流控 (Flow) = ${cyan}xtls-rprx-vision${none}"
     echo -e "$yellow SNI = ${cyan}${p_sni}$none"
     echo -e "$yellow 指纹 (Fingerprint) = ${cyan}chrome${none}"
-    echo -e "$yellow 公钥 (PublicKey) = ${cyan}${public_key}$none"
-    echo -e "$yellow ShortId = ${cyan}${shortid}$none"
+    # --- 修改：直接使用传入的公钥变量 ---
+    echo -e "$yellow 公钥 (PublicKey) = ${cyan}${public_key}${none}"
+    echo -e "$yellow ShortId = ${cyan}${shortid}${none}"
     echo
     echo "---------- VLESS Reality URL ----------"
     local vless_url_ip=$ip
@@ -123,34 +123,30 @@ display_result() {
     local vless_reality_url="vless://${p_uuid}@${vless_url_ip}:${p_port}?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&sni=${p_sni}&fp=chrome&pbk=${public_key}&sid=${shortid}&#${node_name}"
     echo -e "${cyan}${vless_reality_url}${none}"
     echo
-
-    # --- 新增：根据选项显示二维码 ---
-    if [[ "$p_no_qrcode" != "true" ]]; then
-        if command -v qrencode &>/dev/null; then
-            info "手机客户端扫描二维码 (请使用UTF-8编码的终端):"
-            qrencode -t ANSIUTF8 "$vless_reality_url"
-        else
-            warn "未找到 qrencode 命令, 无法生成二维码。请手动安装 (apt-get install qrencode / yum install qrencode)。"
-        fi
-    fi
     echo "----------------------------------------"
 }
 
 # --- 安装主函数 ---
 install_xray() {
-    # 交互模式提问，非交互模式使用传入的参数
     if [ "$IS_INTERACTIVE" = "true" ]; then
         warn "进入交互式安装模式..."
         if [[ -n "$IPv4" && -n "$IPv6" ]]; then
             read -p "检测到双栈网络, 请选择用于连接的网络栈 [默认: 4 (IPv4)]: (4/6) " p_netstack
             [ -z "$p_netstack" ] && p_netstack=4
-        elif [[ -n "$IPv4" ]]; then p_netstack=4; else p_netstack=6; fi
+        elif [[ -n "$IPv4" ]]; then
+            p_netstack=4
+        else
+            p_netstack=6
+        fi
         
-        read -p "请输入监听端口 [1024-65535, 默认: 443]: " p_port; [ -z "$p_port" ] && p_port=443
-        read -p "请输入SNI域名 [默认: learn.microsoft.com]: " p_sni; [ -z "$p_sni" ] && p_sni="learn.microsoft.com"
+        read -p "请输入监听端口 [1024-65535, 默认: 443]: " p_port
+        [ -z "$p_port" ] && p_port=443
+
+        read -p "请输入SNI域名 [默认: learn.microsoft.com]: " p_sni
+        [ -z "$p_sni" ] && p_sni="learn.microsoft.com"
+
         read -p "请输入UUID [留空则自动生成]: " p_uuid
-        read -p "是否显示二维码? [Y/n]: " show_qrcode
-        if [[ "$show_qrcode" =~ ^[nN]$ ]]; then p_no_qrcode="true"; else p_no_qrcode="false"; fi
+
     else
         warn "检测到参数, 进入非交互式安装模式..."
     fi
@@ -202,6 +198,7 @@ install_xray() {
     info "安装最新版本的 Xray-core..."
     bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
     
+    # --- 修改：一次性生成并捕获所有密钥信息 ---
     local keys=$(xray x25519)
     local private_key=$(echo "$keys" | awk '/Private key:/ {print $3}')
     local public_key=$(echo "$keys" | awk '/Public key:/ {print $3}')
@@ -216,7 +213,12 @@ install_xray() {
           "listen": "0.0.0.0",
           "port": ${p_port},
           "protocol": "vless",
-          "settings": { "clients": [ { "id": "${p_uuid}", "flow": "xtls-rprx-vision" } ], "decryption": "none" },
+          "settings": {
+            "clients": [
+              { "id": "${p_uuid}", "flow": "xtls-rprx-vision" }
+            ],
+            "decryption": "none"
+          },
           "streamSettings": {
             "network": "tcp",
             "security": "reality",
@@ -239,7 +241,8 @@ install_xray() {
     }
 EOF
     restart_xray
-    display_result "$p_port" "$p_uuid" "$p_sni" "$ip" "$p_netstack" "$public_key" "$shortid" "$p_no_qrcode"
+    # --- 修改：将所有需要的值作为参数传递 ---
+    display_result "$p_port" "$p_uuid" "$p_sni" "$ip" "$p_netstack" "$public_key" "$shortid"
 }
 
 # =================================================================================================
@@ -268,22 +271,16 @@ detect_os() {
 
 install_dependencies() {
     info "正在检查并安装核心依赖..."
-    # --- 修改：增加 qrencode 依赖 ---
     if [[ "$PKG_MANAGER" == "apt-get" ]]; then
         $PKG_MANAGER update -y
-        $PKG_MANAGER install -y curl sudo jq coreutils qrencode
+        $PKG_MANAGER install -y curl sudo jq coreutils
     elif [[ "$PKG_MANAGER" == "yum" || "$PKG_MANAGER" == "dnf" ]]; then
-        # For CentOS/RHEL, qrencode might be in EPEL repository
-        if ! command -v qrencode &> /dev/null; then
-            warn "正在尝试安装 EPEL 源以获取 qrencode..."
-            $PKG_MANAGER install -y epel-release
-        fi
-        $PKG_MANAGER install -y curl sudo jq coreutils qrencode
+        $PKG_MANAGER install -y curl sudo jq coreutils
     fi
 }
 
 display_help() {
-    echo "Xray-Reality 一键管理脚本 V2.3"
+    echo "Xray-Reality 一键管理脚本 V2.2"
     echo "----------------------------------------"
     echo "用法: $0 [动作] [选项]"
     echo
@@ -300,7 +297,6 @@ display_help() {
     echo "  --port <端口>        监听端口 (默认: 443)。"
     echo "  --uuid <UUID>        用户UUID (默认: 自动生成)。"
     echo "  --sni <域名>         SNI域名 (默认: learn.microsoft.com)。"
-    echo "  --no-qrcode          不显示分享链接的二维码。" # <<<--- 新增 ---<<<
     echo
     echo "如果不带任何参数运行, 将显示交互式主菜单。"
     exit 0
@@ -315,7 +311,6 @@ p_netstack=""
 p_port=""
 p_uuid=""
 p_sni=""
-p_no_qrcode="false" # <-- 新增
 IS_INTERACTIVE="true"
 
 if [[ $# -gt 0 ]]; then
@@ -330,7 +325,6 @@ if [[ $# -gt 0 ]]; then
                 --port) p_port="$2"; shift 2;;
                 --uuid) p_uuid="$2"; shift 2;;
                 --sni) p_sni="$2"; shift 2;;
-                --no-qrcode) p_no_qrcode="true"; shift;; # <<<--- 新增 ---<<<
                 *) error "安装时使用了未知选项: $1";;
               esac
             done
@@ -350,7 +344,7 @@ IPv6=$(curl -6s -m 2 https://www.cloudflare.com/cdn-cgi/trace | grep -oP 'ip=\K.
 
 main_menu() {
     clear
-    echo "Xray-Reality 一键管理脚本 V2.3"
+    echo "Xray-Reality 一键管理脚本 V2.2"
     echo "----------------------------------------"
     if [ -f "$XRAY_BIN_FILE" ]; then
         echo -e "当前状态: $green已安装$none"
