@@ -3,7 +3,7 @@
 # ==============================================================================
 # Script: Xray VLESS Reality One-Click Installer/Uninstaller (All-in-One Version)
 # Description: Installs or Uninstalls Xray with VLESS Reality protocol.
-# Features: Named arguments, non-interactive mode, uninstaller, custom node name, fixed shortid.
+# Features: Named arguments, non-interactive mode, uninstaller, custom node name, fixed shortid, no BBR, port security check.
 # Forked and Modified for specific, streamlined usage.
 # ==============================================================================
 
@@ -61,7 +61,7 @@ display_help() {
     echo
     echo "安装选项:"
     echo "  --netstack <4|6>     指定使用的网络栈 (IPv4 或 IPv6)。默认自动检测。"
-    echo "  --port <端口号>      指定监听端口 (1-65535)。默认 443。"
+    echo "  --port <端口号>      指定监听端口 (1-65535)。建议使用 1024-65535 范围。"
     echo "  --uuid <UUID>        指定用户 UUID。默认基于主机信息生成。"
     echo "  --sni <域名>         指定服务器名称指示 (SNI)。默认 learn.microsoft.com。"
     echo
@@ -79,7 +79,7 @@ p_port=""
 p_uuid=""
 p_sni=""
 
-# --- 新增：用于判断是否为非交互模式的标志 ---
+# --- 用于判断是否为非交互模式的标志 ---
 NON_INTERACTIVE_MODE="false"
 if [[ $# -gt 0 ]]; then
     NON_INTERACTIVE_MODE="true"
@@ -152,10 +152,20 @@ fi
 
 # 确定端口
 if [[ -z "$p_port" ]]; then p_port=443; fi
-# 验证端口
+
+# --- 新增：端口安全检查 ---
 if ! [[ "$p_port" =~ ^[0-9]+$ ]] || [ "$p_port" -lt 1 ] || [ "$p_port" -gt 65535 ]; then
     error "端口号无效, 请输入 1-65535 之间的数字。"
 fi
+
+if [ "$p_port" -le 1023 ]; then
+    if [ "$(id -u)" -eq 0 ]; then
+        warn "警告: 您选择了一个周知端口 (${p_port})。虽然root用户有权限使用, 但通常建议使用 1024 以上的端口以避免潜在冲突。"
+    else
+        error "错误: 非root用户无权使用 1-1023 范围内的周知端口。请选择 1024-65535 范围的端口。"
+    fi
+fi
+
 
 # 确定SNI
 if [[ -z "$p_sni" ]]; then p_sni="learn.microsoft.com"; fi
@@ -174,7 +184,7 @@ echo -e "$yellow  用户ID (UUID) = ${cyan}${p_uuid}${none}"
 echo -e "$yellow  服务器名 (SNI) = ${cyan}${p_sni}${none}"
 echo "----------------------------------------------------------------"
 
-# --- 修改：只有在交互模式下才暂停确认 ---
+# --- 只有在交互模式下才暂停确认 ---
 if [ "$NON_INTERACTIVE_MODE" = "false" ]; then
     pause
 fi
@@ -203,15 +213,6 @@ echo -e "$yellow  私钥 (PrivateKey) = ${cyan}${private_key}${none}"
 echo -e "$yellow  公钥 (PublicKey) = ${cyan}${public_key}${none}"
 echo -e "$yellow  ShortId = ${cyan}${shortid}${none}"
 echo "----------------------------------------------------------------"
-
-# --- 开启BBR ---
-echo
-warn "开启 BBR..."
-sed -i '/net.ipv4.tcp_congestion_control/d' /etc/sysctl.conf
-sed -i '/net.core.default_qdisc/d' /sysctl.conf
-echo "net.ipv4.tcp_congestion_control = bbr" >>/etc/sysctl.conf
-echo "net.core.default_qdisc = fq" >>/etc/sysctl.conf
-sysctl -p >/dev/null 2>&1
 
 # --- 配置 Xray config.json ---
 echo
@@ -273,7 +274,7 @@ sleep 1
 service xray status
 
 # 获取节点名
-node_name="$(hostname)-X-reality"
+node_name="$(hostname)-reality"
 
 echo
 echo "---------- Xray 配置信息 -------------"
