@@ -2,7 +2,7 @@
 Xray Vless-Reality 极简一键脚本
 
 # 说明 
-fork自 https://github.com/crazypeace/xray-vless-reality
+fork 自 https://github.com/crazypeace/xray-vless-reality
 
 # 一键安装
 ```
@@ -14,7 +14,7 @@ bash <(curl -sL https://raw.githubusercontent.com/yahuisme/xray-vless-reality/ma
 ```
 
 # 客户端参数配置
-脚本最后会输出VLESS链接，方便你导入翻墙客户端。
+脚本最后会输出 VLESS 链接，方便你导入翻墙客户端。
 
 # 更新
 ```
@@ -38,8 +38,8 @@ bash <(curl -sL https://raw.githubusercontent.com/yahuisme/xray-vless-reality/ma
 
 其中
 
-`port` 端口. 不写的话, 默认443
+`port` 端口。不写的话, 默认 443
 
-`domain` 你指定的网站域名. 不写的话, 默认 learn.microsoft.com
+`domain` 你指定的网站域名。不写的话, 默认 learn.microsoft.com
 
-`UUID` 你的UUID. 不写的话, 自动生成
+`UUID` 你的 UUID。不写的话, 自动生成
