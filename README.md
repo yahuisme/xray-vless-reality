@@ -1,5 +1,5 @@
-# xray-vless-reality
-Xray Vless-Reality 极简一键脚本
+# Xray-VLESS-reality
+Xray VLESS-reality 极简一键脚本
 
 # 说明 
 fork 自 https://github.com/crazypeace/xray-vless-reality
