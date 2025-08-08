@@ -153,8 +153,8 @@ fi
 # 确定端口
 if [[ -z "$p_port" ]]; then p_port=443; fi
 # 验证端口
-if ! [[ "$p_port" =~ ^[0-9]+$ ]] || [ "$p_port" -lt 1 ] || [ "$p_port" -gt 65535 ]; then
-    error "端口号无效, 请输入 1-65535 之间的数字。"
+if ! [[ "$p_port" =~ ^[0-9]+$ ]] || [ "$p_port" -lt 1000 ] || [ "$p_port" -gt 65535 ]; then
+    error "端口号无效, 请输入 1000-65535 之间的数字。"
 fi
 
 # 确定SNI
@@ -273,7 +273,7 @@ sleep 1
 service xray status
 
 # 获取节点名
-node_name="$(hostname)-reality"
+node_name="$(hostname)-X-reality"
 
 echo
 echo "---------- Xray 配置信息 -------------"
