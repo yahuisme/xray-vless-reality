@@ -3,7 +3,7 @@
 # ==============================================================================
 # Script: Xray VLESS Reality One-Click Installer/Uninstaller (All-in-One Version)
 # Description: Installs or Uninstalls Xray with VLESS Reality protocol.
-# Features: Named arguments, non-interactive mode, uninstaller, custom node name, fixed shortid, no BBR, port security check.
+# Features: Named arguments, interactive/non-interactive modes, uninstaller, custom node name, fixed shortid, no BBR, port security check.
 # Forked and Modified for specific, streamlined usage.
 # ==============================================================================
 
@@ -37,19 +37,12 @@ pause() {
 # --- 卸载功能函数 ---
 uninstall_script() {
     warn "即将开始卸载 Xray..."
-    
-    # 1. 停止 Xray 服务
     systemctl stop xray
-    
-    # 2. 使用官方安装脚本的卸载模式，移除 Xray 主程序和 service 文件
     warn "执行官方卸载脚本..."
     bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ remove
-    
-    # 3. 清理残留的配置文件和日志文件
     warn "清理残留文件..."
     rm -rf /usr/local/etc/xray
     rm -rf /var/log/xray
-    
     echo
     warn "Xray 已被彻底卸载 (Purged)。"
     exit 0
@@ -58,6 +51,7 @@ uninstall_script() {
 display_help() {
     echo "Xray VLESS Reality 一键管理脚本 (安装/卸载一体版)"
     echo "用法: $0 [选项]"
+    echo "如果不带任何选项运行, 将进入交互式安装模式。"
     echo
     echo "安装选项:"
     echo "  --netstack <4|6>     指定使用的网络栈 (IPv4 或 IPv6)。默认自动检测。"
@@ -72,46 +66,40 @@ display_help() {
     exit 0
 }
 
-
-# --- Default Settings ---
+# --- 初始化变量 ---
 p_netstack=""
 p_port=""
 p_uuid=""
 p_sni=""
+ip=""
+IPv4=""
+IPv6=""
 
-# --- 用于判断是否为非交互模式的标志 ---
-NON_INTERACTIVE_MODE="false"
+# --- 判断执行模式 ---
+HAS_ARGS="false"
 if [[ $# -gt 0 ]]; then
-    NON_INTERACTIVE_MODE="true"
+    HAS_ARGS="true"
 fi
 
-
-# --- Parse Command-Line Arguments ---
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --netstack)
-      p_netstack="$2"; shift 2;;
-    --port)
-      p_port="$2"; shift 2;;
-    --uuid)
-      p_uuid="$2"; shift 2;;
-    --sni)
-      p_sni="$2"; shift 2;;
-    --uninstall)
-      uninstall_script;;
-    -h|--help)
-      display_help;;
-    *)
-      # 忽略未知参数以允许默认执行
-      shift
-      ;;
-  esac
-done
-
-
 # ==============================================================================
-# --- 安装流程从这里开始 (如果未调用卸载) ---
+# --- 主逻辑开始 ---
 # ==============================================================================
+
+# --- 参数处理 ---
+# 只有在提供了参数时才进行解析
+if [ "$HAS_ARGS" = "true" ]; then
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --netstack) p_netstack="$2"; shift 2;;
+        --port) p_port="$2"; shift 2;;
+        --uuid) p_uuid="$2"; shift 2;;
+        --sni) p_sni="$2"; shift 2;;
+        --uninstall) uninstall_script;;
+        -h|--help) display_help;;
+        *) error "未知选项: $1";;
+      esac
+    done
+fi
 
 # 脚本说明
 echo
@@ -121,8 +109,6 @@ echo "----------------------------------------------------------------"
 
 # 获取本机IP
 InFaces=($(ls /sys/class/net/ | grep -E '^(eth|ens|eno|esp|enp|venet|vif)'))
-IPv4=""
-IPv6=""
 for i in "${InFaces[@]}"; do
     Public_IPv4=$(curl -4s --interface "$i" -m 2 https://www.cloudflare.com/cdn-cgi/trace | grep -oP "ip=\K.*$")
     Public_IPv6=$(curl -6s --interface "$i" -m 2 https://www.cloudflare.com/cdn-cgi/trace | grep -oP "ip=\K.*$")
@@ -130,34 +116,51 @@ for i in "${InFaces[@]}"; do
     if [[ -n "$Public_IPv6" ]]; then IPv6="$Public_IPv6"; fi
 done
 
-# --- 变量最终确定 ---
-
-# 确定网络栈和IP
-ip=""
-if [[ -z "$p_netstack" ]]; then
-    if [[ -n "$IPv4" ]]; then
-        p_netstack=4
-        ip=$IPv4
-    elif [[ -n "$IPv6" ]]; then
-        p_netstack=6
-        ip=$IPv6
-    else
-        error "无法获取到任何公网IP地址。"
+# --- 根据模式确定变量 ---
+if [ "$HAS_ARGS" = "true" ]; then
+    # --- 非交互模式：根据参数或默认值设定变量 ---
+    warn "检测到参数, 进入非交互式安装模式..."
+    # 确定网络栈和IP
+    if [[ -z "$p_netstack" ]]; then
+        if [[ -n "$IPv4" ]]; then p_netstack=4; else p_netstack=6; fi
     fi
+    if [[ "$p_netstack" == "4" ]]; then ip=$IPv4; else ip=$IPv6; fi
+    if [[ -z "$ip" ]]; then error "无法获取到公网IP地址。"; fi
+    
+    # 设定默认值
+    if [[ -z "$p_port" ]]; then p_port=443; fi
+    if [[ -z "$p_sni" ]]; then p_sni="learn.microsoft.com"; fi
+
 else
-    if [[ "$p_netstack" == "4" ]]; then ip=$IPv4; fi
-    if [[ "$p_netstack" == "6" ]]; then ip=$IPv6; fi
-    if [[ -z "$ip" ]]; then error "指定的网络栈 (IPv${p_netstack}) 没有获取到公网IP地址。"; fi
+    # --- 交互模式：提问并获取用户输入 ---
+    warn "未检测到任何参数, 进入交互式安装模式..."
+    # 交互式选择网络栈
+    if [[ -n "$IPv4" && -n "$IPv6" ]]; then
+        read -p "检测到双栈网络, 请选择用于连接的网络栈 [默认: 4 (IPv4)]: (4/6) " p_netstack
+        [ -z "$p_netstack" ] && p_netstack=4
+    elif [[ -n "$IPv4" ]]; then
+        p_netstack=4
+    else
+        p_netstack=6
+    fi
+    if [[ "$p_netstack" == "4" ]]; then ip=$IPv4; else ip=$IPv6; fi
+    echo -e "您选择了: $yellow IPv${p_netstack} ${none} | IP地址: $cyan ${ip} ${none}"
+
+    # 交互式输入端口
+    read -p "请输入监听端口 [1024-65535, 默认: 443]: " p_port
+    [ -z "$p_port" ] && p_port=443
+
+    # 交互式输入SNI
+    read -p "请输入SNI域名 [默认: learn.microsoft.com]: " p_sni
+    [ -z "$p_sni" ] && p_sni="learn.microsoft.com"
 fi
 
-# 确定端口
-if [[ -z "$p_port" ]]; then p_port=443; fi
+# --- 公共变量设定和检查 ---
 
-# --- 新增：端口安全检查 ---
+# 端口安全检查
 if ! [[ "$p_port" =~ ^[0-9]+$ ]] || [ "$p_port" -lt 1 ] || [ "$p_port" -gt 65535 ]; then
     error "端口号无效, 请输入 1-65535 之间的数字。"
 fi
-
 if [ "$p_port" -le 1023 ]; then
     if [ "$(id -u)" -eq 0 ]; then
         warn "警告: 您选择了一个周知端口 (${p_port})。虽然root用户有权限使用, 但通常建议使用 1024 以上的端口以避免潜在冲突。"
@@ -166,17 +169,15 @@ if [ "$p_port" -le 1023 ]; then
     fi
 fi
 
-
-# 确定SNI
-if [[ -z "$p_sni" ]]; then p_sni="learn.microsoft.com"; fi
-
-# 确定UUID
+# 确定UUID (如果未在参数或交互中指定)
 if [[ -z "$p_uuid" ]]; then
     uuidSeed=${IPv4}${IPv6}$(cat /proc/sys/kernel/hostname)$(cat /etc/timezone)
     p_uuid=$(echo -n "https://github.com/crazypeace/xray-vless-reality${uuidSeed}" | sha1sum | awk '{print $1}' | sed -E 's/(.{8})(.{4})(.{4})(.{4})(.{12}).*/\1-\2-\3-\4-\5/')
+    warn "UUID已自动生成。"
 fi
 
 # --- 配置总览 ---
+echo "----------------------------------------------------------------"
 echo "安装配置总览:"
 echo -e "$yellow  网络栈 (Netstack) = ${cyan}${p_netstack} (IP: ${ip})${none}"
 echo -e "$yellow  端口 (Port) = ${cyan}${p_port}${none}"
@@ -185,7 +186,7 @@ echo -e "$yellow  服务器名 (SNI) = ${cyan}${p_sni}${none}"
 echo "----------------------------------------------------------------"
 
 # --- 只有在交互模式下才暂停确认 ---
-if [ "$NON_INTERACTIVE_MODE" = "false" ]; then
+if [ "$HAS_ARGS" = "false" ]; then
     pause
 fi
 
@@ -204,7 +205,6 @@ bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release
 keys=$(xray x25519)
 private_key=$(echo "$keys" | awk '/Private key:/ {print $3}')
 public_key=$(echo "$keys" | awk '/Public key:/ {print $3}')
-# --- 使用您指定的固定 ShortID ---
 shortid="20220701"
 
 echo
@@ -219,9 +219,7 @@ echo
 warn "配置 /usr/local/etc/xray/config.json..."
 cat > /usr/local/etc/xray/config.json <<-EOF
 {
-  "log": {
-    "loglevel": "warning"
-  },
+  "log": { "loglevel": "warning" },
   "inbounds": [
     {
       "listen": "0.0.0.0",
@@ -229,10 +227,7 @@ cat > /usr/local/etc/xray/config.json <<-EOF
       "protocol": "vless",
       "settings": {
         "clients": [
-          {
-            "id": "${p_uuid}",
-            "flow": "xtls-rprx-vision"
-          }
+          { "id": "${p_uuid}", "flow": "xtls-rprx-vision" }
         ],
         "decryption": "none"
       },
@@ -248,21 +243,12 @@ cat > /usr/local/etc/xray/config.json <<-EOF
           "shortIds": ["${shortid}"]
         }
       },
-      "sniffing": {
-        "enabled": true,
-        "destOverride": ["http", "tls", "quic"]
-      }
+      "sniffing": { "enabled": true, "destOverride": ["http", "tls", "quic"] }
     }
   ],
   "outbounds": [
-    {
-      "protocol": "freedom",
-      "tag": "direct"
-    },
-    {
-      "protocol": "blackhole",
-      "tag": "block"
-    }
+    { "protocol": "freedom", "tag": "direct" },
+    { "protocol": "blackhole", "tag": "block" }
   ]
 }
 EOF
@@ -274,7 +260,7 @@ sleep 1
 service xray status
 
 # 获取节点名
-node_name="$(hostname)-reality"
+node_name="$(hostname)-X-reality"
 
 echo
 echo "---------- Xray 配置信息 -------------"
