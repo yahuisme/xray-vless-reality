@@ -3,7 +3,7 @@
 # ==============================================================================
 # Script: Xray VLESS Reality One-Click Installer/Uninstaller (All-in-One Version)
 # Description: Installs or Uninstalls Xray with VLESS Reality protocol.
-# Features: Named arguments, focused installation, uninstaller, custom node name, fixed shortid.
+# Features: Named arguments, non-interactive mode, uninstaller, custom node name, fixed shortid.
 # Forked and Modified for specific, streamlined usage.
 # ==============================================================================
 
@@ -79,13 +79,14 @@ p_port=""
 p_uuid=""
 p_sni=""
 
-
-# --- Parse Command-Line Arguments ---
-if [[ $# -eq 0 ]]; then
-    # 如果没有任何参数，可以显示帮助或提示
-    echo "未提供任何参数。将以交互模式或默认配置继续。如需指定参数，请使用 --help 查看选项。"
+# --- 新增：用于判断是否为非交互模式的标志 ---
+NON_INTERACTIVE_MODE="false"
+if [[ $# -gt 0 ]]; then
+    NON_INTERACTIVE_MODE="true"
 fi
 
+
+# --- Parse Command-Line Arguments ---
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --netstack)
@@ -172,7 +173,11 @@ echo -e "$yellow  端口 (Port) = ${cyan}${p_port}${none}"
 echo -e "$yellow  用户ID (UUID) = ${cyan}${p_uuid}${none}"
 echo -e "$yellow  服务器名 (SNI) = ${cyan}${p_sni}${none}"
 echo "----------------------------------------------------------------"
-pause
+
+# --- 修改：只有在交互模式下才暂停确认 ---
+if [ "$NON_INTERACTIVE_MODE" = "false" ]; then
+    pause
+fi
 
 # --- 系统准备 ---
 apt update
@@ -203,7 +208,7 @@ echo "----------------------------------------------------------------"
 echo
 warn "开启 BBR..."
 sed -i '/net.ipv4.tcp_congestion_control/d' /etc/sysctl.conf
-sed -i '/net.core.default_qdisc/d' /etc/sysctl.conf
+sed -i '/net.core.default_qdisc/d' /sysctl.conf
 echo "net.ipv4.tcp_congestion_control = bbr" >>/etc/sysctl.conf
 echo "net.core.default_qdisc = fq" >>/etc/sysctl.conf
 sysctl -p >/dev/null 2>&1
@@ -281,7 +286,7 @@ echo -e "$yellow 流控 (Flow) = ${cyan}xtls-rprx-vision${none}"
 echo -e "$yellow 加密 (Encryption) = ${cyan}none${none}"
 echo -e "$yellow 传输协议 (Network) = ${cyan}tcp${none}"
 echo -e "$yellow 底层传输安全 (TLS) = ${cyan}reality$none"
-echo -e "$yellow SNI = ${cyan}${p_sni}$none}"
+echo -e "$yellow SNI = ${cyan}${p_sni}${none}"
 echo -e "$yellow 指纹 (Fingerprint) = ${cyan}chrome${none}"
 echo -e "$yellow 公钥 (PublicKey) = ${cyan}${public_key}${none}"
 echo -e "$yellow ShortId = ${cyan}${shortid}${none}"
