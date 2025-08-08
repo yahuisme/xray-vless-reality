@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # ==============================================================================
-# Script: Xray VLESS Reality One-Click Installer (Streamlined Version)
-# Description: Installs Xray with VLESS Reality protocol.
-# Features: Named arguments, focused installation, custom node name.
+# Script: Xray VLESS Reality One-Click Installer/Uninstaller (All-in-One Version)
+# Description: Installs or Uninstalls Xray with VLESS Reality protocol.
+# Features: Named arguments, focused installation, uninstaller, custom node name, fixed shortid.
 # Forked and Modified for specific, streamlined usage.
 # ==============================================================================
 
@@ -34,15 +34,39 @@ pause() {
     echo
 }
 
+# --- 卸载功能函数 ---
+uninstall_script() {
+    warn "即将开始卸载 Xray..."
+    
+    # 1. 停止 Xray 服务
+    systemctl stop xray
+    
+    # 2. 使用官方安装脚本的卸载模式，移除 Xray 主程序和 service 文件
+    warn "执行官方卸载脚本..."
+    bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ remove
+    
+    # 3. 清理残留的配置文件和日志文件
+    warn "清理残留文件..."
+    rm -rf /usr/local/etc/xray
+    rm -rf /var/log/xray
+    
+    echo
+    warn "Xray 已被彻底卸载 (Purged)。"
+    exit 0
+}
+
 display_help() {
-    echo "Xray VLESS Reality 一键安装脚本 (精简版)"
+    echo "Xray VLESS Reality 一键管理脚本 (安装/卸载一体版)"
     echo "用法: $0 [选项]"
     echo
-    echo "选项:"
+    echo "安装选项:"
     echo "  --netstack <4|6>     指定使用的网络栈 (IPv4 或 IPv6)。默认自动检测。"
     echo "  --port <端口号>      指定监听端口 (1-65535)。默认 443。"
     echo "  --uuid <UUID>        指定用户 UUID。默认基于主机信息生成。"
     echo "  --sni <域名>         指定服务器名称指示 (SNI)。默认 learn.microsoft.com。"
+    echo
+    echo "管理选项:"
+    echo "  --uninstall          执行卸载流程，移除Xray和所有相关文件。"
     echo "  -h, --help           显示此帮助菜单并退出。"
     echo
     exit 0
@@ -57,40 +81,41 @@ p_sni=""
 
 
 # --- Parse Command-Line Arguments ---
+if [[ $# -eq 0 ]]; then
+    # 如果没有任何参数，可以显示帮助或提示
+    echo "未提供任何参数。将以交互模式或默认配置继续。如需指定参数，请使用 --help 查看选项。"
+fi
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --netstack)
-      p_netstack="$2"
-      shift 2
-      ;;
+      p_netstack="$2"; shift 2;;
     --port)
-      p_port="$2"
-      shift 2
-      ;;
+      p_port="$2"; shift 2;;
     --uuid)
-      p_uuid="$2"
-      shift 2
-      ;;
+      p_uuid="$2"; shift 2;;
     --sni)
-      p_sni="$2"
-      shift 2
-      ;;
+      p_sni="$2"; shift 2;;
+    --uninstall)
+      uninstall_script;;
     -h|--help)
-      display_help
-      ;;
+      display_help;;
     *)
-      error "未知选项: $1"
+      # 忽略未知参数以允许默认执行
+      shift
       ;;
   esac
 done
 
 
-# --- Main Logic ---
+# ==============================================================================
+# --- 安装流程从这里开始 (如果未调用卸载) ---
+# ==============================================================================
 
 # 脚本说明
 echo
 echo -e "$yellow此脚本仅兼容于Debian 10+系统。如果你的系统不符合,请Ctrl+C退出脚本$none"
-echo -e "这是一个精简版本, 移除了WARP和二维码功能, 使用 -h 或 --help 查看帮助。"
+echo -e "这是一个安装/卸载一体版本, 使用 -h 或 --help 查看帮助。"
 echo "----------------------------------------------------------------"
 
 # 获取本机IP
@@ -164,7 +189,8 @@ bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release
 keys=$(xray x25519)
 private_key=$(echo "$keys" | awk '/Private key:/ {print $3}')
 public_key=$(echo "$keys" | awk '/Public key:/ {print $3}')
-shortid=$(openssl rand -hex 8)
+# --- 使用您指定的固定 ShortID ---
+shortid="20220701"
 
 echo
 echo "密钥信息:"
@@ -255,7 +281,7 @@ echo -e "$yellow 流控 (Flow) = ${cyan}xtls-rprx-vision${none}"
 echo -e "$yellow 加密 (Encryption) = ${cyan}none${none}"
 echo -e "$yellow 传输协议 (Network) = ${cyan}tcp${none}"
 echo -e "$yellow 底层传输安全 (TLS) = ${cyan}reality$none"
-echo -e "$yellow SNI = ${cyan}${p_sni}$none"
+echo -e "$yellow SNI = ${cyan}${p_sni}$none}"
 echo -e "$yellow 指纹 (Fingerprint) = ${cyan}chrome${none}"
 echo -e "$yellow 公钥 (PublicKey) = ${cyan}${public_key}${none}"
 echo -e "$yellow ShortId = ${cyan}${shortid}${none}"
