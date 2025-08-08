@@ -2,7 +2,7 @@
 
 # =================================================================================================
 # Script:         Xray-Reality All-in-One Management Script
-# Version:        2.0 (Public Release Candidate)
+# Version:        2.1 (Final Release)
 # Author:         (Your Name/ID, based on Crazypeace's original script)
 # Description:    A comprehensive script to install, uninstall, update, and manage 
 #                 Xray with VLESS-Reality protocol. Supports both interactive menu 
@@ -99,7 +99,6 @@ display_result() {
     local ip="$4"
     local p_netstack="$5"
     
-    # 从配置文件读取密钥和ShortID，确保显示的是当前生效的配置
     local private_key=$(jq -r '.inbounds[0].streamSettings.realitySettings.privateKey' $XRAY_CONFIG_FILE)
     local public_key=$(echo "$private_key" | xray x25519 -i | awk '/Public key:/ {print $3}')
     local shortid=$(jq -r '.inbounds[0].streamSettings.realitySettings.shortIds[0]' $XRAY_CONFIG_FILE)
@@ -113,10 +112,10 @@ display_result() {
     echo -e "$yellow 端口 (Port) = ${cyan}${p_port}$none"
     echo -e "$yellow 用户ID (UUID) = $cyan${p_uuid}$none"
     echo -e "$yellow 流控 (Flow) = ${cyan}xtls-rprx-vision${none}"
-    echo -e "$yellow SNI = ${cyan}${p_sni}${none}"
+    echo -e "$yellow SNI = ${cyan}${p_sni}$none"
     echo -e "$yellow 指纹 (Fingerprint) = ${cyan}chrome${none}"
-    echo -e "$yellow 公钥 (PublicKey) = ${cyan}${public_key}${none}"
-    echo -e "$yellow ShortId = ${cyan}${shortid}${none}"
+    echo -e "$yellow 公钥 (PublicKey) = ${cyan}${public_key}$none"
+    echo -e "$yellow ShortId = ${cyan}${shortid}$none"
     echo
     echo "---------- VLESS Reality URL ----------"
     local vless_url_ip=$ip
@@ -129,11 +128,8 @@ display_result() {
 
 # --- 安装主函数 ---
 install_xray() {
-    # 如果是通过菜单调用，各项参数为空，需要交互式获取
     if [ "$IS_INTERACTIVE" = "true" ]; then
-        # ... 交互式提问逻辑 ...
         warn "进入交互式安装模式..."
-        # 交互式选择网络栈
         if [[ -n "$IPv4" && -n "$IPv6" ]]; then
             read -p "检测到双栈网络, 请选择用于连接的网络栈 [默认: 4 (IPv4)]: (4/6) " p_netstack
             [ -z "$p_netstack" ] && p_netstack=4
@@ -143,11 +139,9 @@ install_xray() {
             p_netstack=6
         fi
         
-        # 交互式输入端口
         read -p "请输入监听端口 [1024-65535, 默认: 443]: " p_port
         [ -z "$p_port" ] && p_port=443
 
-        # 交互式输入SNI
         read -p "请输入SNI域名 [默认: learn.microsoft.com]: " p_sni
         [ -z "$p_sni" ] && p_sni="learn.microsoft.com"
 
@@ -157,19 +151,16 @@ install_xray() {
         warn "检测到参数, 进入非交互式安装模式..."
     fi
 
-    # --- 变量最终确定 (对两种模式都生效) ---
-    # 确定网络栈和IP
+    # --- 变量最终确定 ---
     if [[ -z "$p_netstack" ]]; then
         if [[ -n "$IPv4" ]]; then p_netstack=4; else p_netstack=6; fi
     fi
     if [[ "$p_netstack" == "4" ]]; then local ip=$IPv4; else local ip=$IPv6; fi
     if [[ -z "$ip" ]]; then error "无法获取到任何公网IP地址。"; fi
     
-    # 设定默认值
     if [[ -z "$p_port" ]]; then p_port=443; fi
     if [[ -z "$p_sni" ]]; then p_sni="learn.microsoft.com"; fi
 
-    # 端口安全检查
     if ! [[ "$p_port" =~ ^[0-9]+$ ]] || [ "$p_port" -lt 1 ] || [ "$p_port" -gt 65535 ]; then
         error "端口号无效, 请输入 1-65535 之间的数字。"
     fi
@@ -181,14 +172,12 @@ install_xray() {
         fi
     fi
 
-    # 确定UUID
     if [[ -z "$p_uuid" ]]; then
         local uuidSeed=${IPv4}${IPv6}$(hostname)$(cat /etc/timezone)
         p_uuid=$(echo -n "https://github.com/crazypeace/xray-vless-reality${uuidSeed}" | sha1sum | awk '{print $1}' | sed -E 's/(.{8})(.{4})(.{4})(.{4})(.{12}).*/\1-\2-\3-\4-\5/')
         warn "UUID已自动生成。"
     fi
 
-    # --- 配置总览 ---
     info "最终配置确认:"
     echo -e "$yellow  网络栈: ${cyan}IPv${p_netstack} (IP: ${ip})${none}"
     echo -e "$yellow  端口: ${cyan}${p_port}${none}"
@@ -253,7 +242,6 @@ EOF
     display_result "$p_port" "$p_uuid" "$p_sni" "$ip" "$p_netstack"
 }
 
-
 # =================================================================================================
 # --- Pre-flight Checks & System Detection ---
 # =================================================================================================
@@ -300,7 +288,7 @@ install_dependencies() {
 
 # --- 帮助菜单 ---
 display_help() {
-    echo "Xray-Reality 一键管理脚本 V2.0"
+    echo "Xray-Reality 一键管理脚本 V2.1"
     echo "----------------------------------------"
     echo "用法: $0 [动作] [选项]"
     echo
@@ -316,7 +304,7 @@ display_help() {
     echo "  --netstack <4|6>     网络栈 (默认: 自动检测)。"
     echo "  --port <端口>        监听端口 (默认: 443)。"
     echo "  --uuid <UUID>        用户UUID (默认: 自动生成)。"
-    echo "  --sni <域名>         SNI域名 (默认: learn.microsoft.com)。"
+    echo "  --sni <域名>         SNI域名 (默认: learn.microsoft.com)。" # <<<--- 已补全 ---<<<
     echo
     echo "如果不带任何参数运行, 将显示交互式主菜单。"
     exit 0
@@ -346,7 +334,7 @@ if [[ $# -gt 0 ]]; then
                 --netstack) p_netstack="$2"; shift 2;;
                 --port) p_port="$2"; shift 2;;
                 --uuid) p_uuid="$2"; shift 2;;
-                --sni) p_sni="$2"; shift 2;;
+                --sni) p_sni="$2"; shift 2;; # <<<--- 已补全 ---<<<
                 *) error "安装时使用了未知选项: $1";;
               esac
             done
@@ -370,7 +358,7 @@ IPv6=$(curl -6s -m 2 https://www.cloudflare.com/cdn-cgi/trace | grep -oP 'ip=\K.
 # --- 主菜单/动作分发 ---
 main_menu() {
     clear
-    echo "Xray-Reality 一键管理脚本 V2.0"
+    echo "Xray-Reality 一键管理脚本 V2.1"
     echo "----------------------------------------"
     if [ -f "$XRAY_BIN_FILE" ]; then
         echo -e "当前状态: $green已安装$none"
