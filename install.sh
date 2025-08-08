@@ -91,7 +91,7 @@ display_result() {
     local public_key="$5"
     local shortid="$6"
     
-    local node_name="$(hostname)-reality"
+    local node_name="$(hostname)-X-reality"
     local vless_url_ip=$ip
     if [[ "$ip" =~ .*:.* ]]; then vless_url_ip="[${ip}]"; fi
     local vless_reality_url="vless://${p_uuid}@${vless_url_ip}:${p_port}?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&sni=${p_sni}&fp=chrome&pbk=${public_key}&sid=${shortid}&#${node_name}"
