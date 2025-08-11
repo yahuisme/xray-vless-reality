@@ -2,11 +2,10 @@
 
 # =================================================================================================
 # Script:         Xray-Reality All-in-One Management Script
-# Version:        4.1 (Final Polished Release)
+# Version:        4.2 (Final Display Fix)
 # Author:         (Your Name/ID, based on Crazypeace's original script)
 # Description:    A comprehensive script to install, uninstall, update, and manage 
-#                 Xray with VLESS-Reality protocol. Saves a snapshot of the config 
-#                 for 100% reliable viewing.
+#                 Xray with VLESS-Reality protocol.
 # OS Support:     Debian 10+, Ubuntu 20.04+, CentOS 7+, RHEL, Fedora, AlmaLinux, Rocky Linux
 # =================================================================================================
 
@@ -95,11 +94,11 @@ display_result() {
     
     local node_name="$(hostname)-X-reality"
     local vless_url_ip=$ip
+    local flow_text="xtls-rprx-vision" # <-- 使用独立变量，确保安全
     if [[ "$ip" =~ .*:.* ]]; then vless_url_ip="[${ip}]"; fi
-    local vless_reality_url="vless://${p_uuid}@${vless_url_ip}:${p_port}?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&sni=${p_sni}&fp=chrome&pbk=${public_key}&sid=${shortid}&#${node_name}"
+    local vless_reality_url="vless://${p_uuid}@${vless_url_ip}:${p_port}?flow=${flow_text}&encryption=none&type=tcp&security=reality&sni=${p_sni}&fp=chrome&pbk=${public_key}&sid=${shortid}&#${node_name}"
 
     local output_text_colored
-    # --- 修复：使用 ${var} 格式确保所有变量被正确解析 ---
     output_text_colored=$(cat <<-EOF
 ---------- 配置信息 ----------
 ${green} --- VLESS Reality 服务器配置 --- ${none}
@@ -107,7 +106,7 @@ ${yellow} 节点名 (Name) = ${cyan}${node_name}${none}
 ${yellow} 地址 (Address) = ${cyan}${ip}${none}
 ${yellow} 端口 (Port) = ${cyan}${p_port}${none}
 ${yellow} 用户ID (UUID) = ${cyan}${p_uuid}${none}
-${yellow} 流控 (Flow) = ${cyan}xtls-rprx-vision${none}
+${yellow} 流控 (Flow) = ${cyan}${flow_text}${none}
 ${yellow} SNI = ${cyan}${p_sni}${none}
 ${yellow} 指纹 (Fingerprint) = ${cyan}chrome${none}
 ${yellow} 公钥 (PublicKey) = ${cyan}${public_key}${none}
@@ -138,7 +137,6 @@ show_config() {
     fi
     
     # 直接输出快照文件的内容，并通过 sed 添加颜色
-    # 这样可以保证快照文件是纯文本，但显示时有颜色
     cat "$XRAY_INFO_FILE" | sed \
         -e "s/--- VLESS Reality 服务器配置 ---/${green}&${none}/" \
         -e "s/节点名 (Name) = /${yellow}&${cyan}/" \
@@ -216,6 +214,7 @@ install_xray() {
     local private_key=$(echo "$keys" | awk '/Private key:/ {print $3}')
     local public_key=$(echo "$keys" | awk '/Public key:/ {print $3}')
     local shortid="20220701"
+    local flow_text="xtls-rprx-vision" # <-- 使用独立变量，确保安全
 
     info "配置 /usr/local/etc/xray/config.json..."
     cat > $XRAY_CONFIG_FILE <<-EOF
@@ -226,7 +225,7 @@ install_xray() {
           "listen": "0.0.0.0",
           "port": ${p_port},
           "protocol": "vless",
-          "settings": { "clients": [ { "id": "${p_uuid}", "flow": "xtls-rprx-vision" } ], "decryption": "none" },
+          "settings": { "clients": [ { "id": "${p_uuid}", "flow": "${flow_text}" } ], "decryption": "none" },
           "streamSettings": {
             "network": "tcp",
             "security": "reality",
@@ -293,7 +292,7 @@ install_dependencies() {
 }
 
 display_help() {
-    echo "Xray-Reality 一键管理脚本 V4.1"
+    echo "Xray-Reality 一键管理脚本 V4.2"
     echo "----------------------------------------"
     echo "用法: $0 [动作] [选项]"
     echo
@@ -358,7 +357,7 @@ IPv6=$(curl -6s -m 2 https://www.cloudflare.com/cdn-cgi/trace | grep -oP 'ip=\K.
 
 main_menu() {
     clear
-    echo "Xray-Reality 一键管理脚本 V4.1"
+    echo "Xray-Reality 一键管理脚本 V4.2"
     echo "----------------------------------------"
     if [ -f "$XRAY_BIN_FILE" ]; then
         echo -e "当前状态: $green已安装$none"
