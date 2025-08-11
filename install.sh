@@ -2,7 +2,7 @@
 
 # =================================================================================================
 # Script:         Xray-Reality All-in-One Management Script
-# Version:        4.0 (Snapshot Edition)
+# Version:        4.1 (Final Polished Release)
 # Author:         (Your Name/ID, based on Crazypeace's original script)
 # Description:    A comprehensive script to install, uninstall, update, and manage 
 #                 Xray with VLESS-Reality protocol. Saves a snapshot of the config 
@@ -99,18 +99,19 @@ display_result() {
     local vless_reality_url="vless://${p_uuid}@${vless_url_ip}:${p_port}?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&sni=${p_sni}&fp=chrome&pbk=${public_key}&sid=${shortid}&#${node_name}"
 
     local output_text_colored
+    # --- 修复：使用 ${var} 格式确保所有变量被正确解析 ---
     output_text_colored=$(cat <<-EOF
 ---------- 配置信息 ----------
-$green --- VLESS Reality 服务器配置 --- $none
-$yellow 节点名 (Name) = $cyan${node_name}$none
-$yellow 地址 (Address) = $cyan${ip}$none
-$yellow 端口 (Port) = $cyan${p_port}$none
-$yellow 用户ID (UUID) = $cyan${p_uuid}$none
-$yellow 流控 (Flow) = $cyanxtls-rprx-vision${none}
-$yellow SNI = $cyan${p_sni}$none
-$yellow 指纹 (Fingerprint) = $cyan chrome${none}
-$yellow 公钥 (PublicKey) = $cyan${public_key}$none
-$yellow ShortId = $cyan${shortid}$none
+${green} --- VLESS Reality 服务器配置 --- ${none}
+${yellow} 节点名 (Name) = ${cyan}${node_name}${none}
+${yellow} 地址 (Address) = ${cyan}${ip}${none}
+${yellow} 端口 (Port) = ${cyan}${p_port}${none}
+${yellow} 用户ID (UUID) = ${cyan}${p_uuid}${none}
+${yellow} 流控 (Flow) = ${cyan}xtls-rprx-vision${none}
+${yellow} SNI = ${cyan}${p_sni}${none}
+${yellow} 指纹 (Fingerprint) = ${cyan}chrome${none}
+${yellow} 公钥 (PublicKey) = ${cyan}${public_key}${none}
+${yellow} ShortId = ${cyan}${shortid}${none}
 
 ---------- VLESS Reality URL ----------
 ${cyan}${vless_reality_url}${none}
@@ -136,8 +137,20 @@ show_config() {
         error "未找到配置快照文件。请先至少成功执行一次安装。"
     fi
     
-    # 直接输出快照文件的内容
-    cat "$XRAY_INFO_FILE"
+    # 直接输出快照文件的内容，并通过 sed 添加颜色
+    # 这样可以保证快照文件是纯文本，但显示时有颜色
+    cat "$XRAY_INFO_FILE" | sed \
+        -e "s/--- VLESS Reality 服务器配置 ---/${green}&${none}/" \
+        -e "s/节点名 (Name) = /${yellow}&${cyan}/" \
+        -e "s/地址 (Address) = /${yellow}&${cyan}/" \
+        -e "s/端口 (Port) = /${yellow}&${cyan}/" \
+        -e "s/用户ID (UUID) = /${yellow}&${cyan}/" \
+        -e "s/流控 (Flow) = /${yellow}&${cyan}/" \
+        -e "s/SNI = /${yellow}&${cyan}/" \
+        -e "s/指纹 (Fingerprint) = /${yellow}&${cyan}/" \
+        -e "s/公钥 (PublicKey) = /${yellow}&${cyan}/" \
+        -e "s/ShortId = /${yellow}&${cyan}/" \
+        -e "/^vless:\/\// s/.*/${cyan}&${none}/" | sed "s/$/${none}/"
     exit 0
 }
 
@@ -280,7 +293,7 @@ install_dependencies() {
 }
 
 display_help() {
-    echo "Xray-Reality 一键管理脚本 V4.0"
+    echo "Xray-Reality 一键管理脚本 V4.1"
     echo "----------------------------------------"
     echo "用法: $0 [动作] [选项]"
     echo
@@ -345,7 +358,7 @@ IPv6=$(curl -6s -m 2 https://www.cloudflare.com/cdn-cgi/trace | grep -oP 'ip=\K.
 
 main_menu() {
     clear
-    echo "Xray-Reality 一键管理脚本 V4.0"
+    echo "Xray-Reality 一键管理脚本 V4.1"
     echo "----------------------------------------"
     if [ -f "$XRAY_BIN_FILE" ]; then
         echo -e "当前状态: $green已安装$none"
