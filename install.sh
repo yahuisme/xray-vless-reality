@@ -2,7 +2,7 @@
 
 # =================================================================================================
 # Script:         Xray-Reality All-in-One Management Script
-# Version:        4.3 (BBR Integration)
+# Version:        4.4 (Cosmetic Update)
 # Author:         (Your Name/ID, based on Crazypeace's original script)
 # Description:    A comprehensive script to install, uninstall, update, and manage
 #                 Xray with VLESS-Reality protocol and enable BBR.
@@ -10,7 +10,6 @@
 # =================================================================================================
 
 # --- Script Header and Colors ---
-echo -e "                      _ ___               \n ___ ___ __ __ ___ _| |  _|___ __ __   _ ___ \n|-_ |_  |  |  |-_ | _ |   |- _|  |  |_| |_  |\n|___|___|   _  |___|___|_|___|  _  |___|___|\n        |_____|               |_____|       "
 red='\e[91m'
 green='\e[92m'
 yellow='\e[93m'
@@ -364,7 +363,7 @@ install_dependencies() {
 }
 
 display_help() {
-    echo "Xray-Reality 一键管理脚本 V4.3"
+    echo "Xray-Reality 一键管理脚本 V4.4"
     echo "----------------------------------------"
     echo "用法: $0 [动作] [选项]"
     echo
@@ -431,7 +430,7 @@ IPv6=$(curl -6s -m 2 https://www.cloudflare.com/cdn-cgi/trace | grep -oP 'ip=\K.
 
 main_menu() {
     clear
-    echo "Xray-Reality 一键管理脚本 V4.3"
+    echo "Xray-Reality 一键管理脚本 V4.4"
     echo "----------------------------------------"
     if [ -f "$XRAY_BIN_FILE" ]; then
         echo -e "当前状态: $green已安装$none"
