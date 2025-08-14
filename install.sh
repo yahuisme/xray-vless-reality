@@ -2,15 +2,15 @@
 
 # =================================================================================================
 # Script:         Xray-Reality All-in-One Management Script
-# Version:        4.2 (Final Display Fix)
+# Version:        4.3 (BBR Integration)
 # Author:         (Your Name/ID, based on Crazypeace's original script)
-# Description:    A comprehensive script to install, uninstall, update, and manage 
-#                 Xray with VLESS-Reality protocol.
+# Description:    A comprehensive script to install, uninstall, update, and manage
+#                 Xray with VLESS-Reality protocol and enable BBR.
 # OS Support:     Debian 10+, Ubuntu 20.04+, CentOS 7+, RHEL, Fedora, AlmaLinux, Rocky Linux
 # =================================================================================================
 
 # --- Script Header and Colors ---
-echo -e "                     _ ___                   \n ___ ___ __ __ ___ _| |  _|___ __ __   _ ___ \n|-_ |_  |  |  |-_ | _ |   |- _|  |  |_| |_  |\n|___|___|  _  |___|___|_|_|___|  _  |___|___|\n        |_____|               |_____|        "
+echo -e "                      _ ___               \n ___ ___ __ __ ___ _| |  _|___ __ __   _ ___ \n|-_ |_  |  |  |-_ | _ |   |- _|  |  |_| |_  |\n|___|___|   _  |___|___|_|___|  _  |___|___|\n        |_____|               |_____|       "
 red='\e[91m'
 green='\e[92m'
 yellow='\e[93m'
@@ -45,6 +45,66 @@ info() {
 # =================================================================================================
 # --- Core Logic Functions ---
 # =================================================================================================
+
+enable_bbr() {
+    info "正在检查并尝试启用 BBR..."
+
+    # 1. Check kernel version
+    local kernel_version
+    kernel_version=$(uname -r | cut -d- -f1)
+    if ! awk -v ver="$kernel_version" 'BEGIN{ if (ver < 4.9) exit 1; }'; then
+        warn "BBR 需要 Linux 内核版本 4.9 或更高。当前版本: $kernel_version"
+        warn "无法启用 BBR。"
+        return 1 # Use return to allow script to continue
+    fi
+    info "内核版本 ($kernel_version) 符合要求。"
+
+    # 2. Check if BBR is already active
+    local current_congestion_control
+    current_congestion_control=$(sysctl -n net.ipv4.tcp_congestion_control)
+    if [[ "$current_congestion_control" == "bbr" ]]; then
+        info "BBR 已经启用。"
+        if lsmod | grep -q "tcp_bbr"; then
+            info "BBR 内核模块已加载。"
+        else
+            warn "BBR 已被设置为拥塞控制算法, 但内核模块未加载。可能需要重启系统才能生效。"
+        fi
+        return 0
+    fi
+
+    info "正在修改 sysctl 配置以启用 BBR..."
+    # 3. Modify /etc/sysctl.conf. Use grep to avoid adding duplicate lines.
+    if ! grep -q "^net.core.default_qdisc=fq" /etc/sysctl.conf; then
+        echo "net.core.default_qdisc=fq" | sudo tee -a /etc/sysctl.conf
+    fi
+    if ! grep -q "^net.ipv4.tcp_congestion_control=bbr" /etc/sysctl.conf; then
+        echo "net.ipv4.tcp_congestion_control=bbr" | sudo tee -a /etc/sysctl.conf
+    fi
+
+    # 4. Apply changes
+    info "应用 sysctl 配置..."
+    if sudo sysctl -p >/dev/null 2>&1; then
+       info "sysctl 配置已成功应用。"
+    else
+       error "应用 sysctl -p 失败。请手动执行 'sudo sysctl -p' 并检查错误。"
+       return 1
+    fi
+
+    # 5. Verify the changes
+    sleep 1
+    local new_congestion_control
+    new_congestion_control=$(sysctl -n net.ipv4.tcp_congestion_control)
+    if [[ "$new_congestion_control" == "bbr" ]] && lsmod | grep -q "tcp_bbr"; then
+        info "BBR 已成功启用并加载。"
+    elif [[ "$new_congestion_control" == "bbr" ]]; then
+        warn "BBR 已成功设置为拥塞控制算法, 但内核模块未加载。可能需要重启系统才能生效。"
+    else
+        error "启用 BBR 失败。当前拥塞控制算法为: $new_congestion_control。请检查系统日志。"
+        return 1
+    fi
+    return 0
+}
+
 
 uninstall_script() {
     info "即将开始卸载 Xray..."
@@ -91,10 +151,10 @@ display_result() {
     local ip="$4"
     local public_key="$5"
     local shortid="$6"
-    
+
     local node_name="$(hostname)-X-reality"
     local vless_url_ip=$ip
-    local flow_text="xtls-rprx-vision" # <-- 使用独立变量，确保安全
+    local flow_text="xtls-rprx-vision" # <-- Use a separate variable for security
     if [[ "$ip" =~ .*:.* ]]; then vless_url_ip="[${ip}]"; fi
     local vless_reality_url="vless://${p_uuid}@${vless_url_ip}:${p_port}?flow=${flow_text}&encryption=none&type=tcp&security=reality&sni=${p_sni}&fp=chrome&pbk=${public_key}&sid=${shortid}&#${node_name}"
 
@@ -122,10 +182,10 @@ EOF
     output_text_plain=$(echo -e "$output_text_colored" | sed 's/\x1b\[[0-9;]*m//g')
 
     clear
-    # 输出到屏幕 (带颜色)
+    # Output to screen (with color)
     echo -e "$output_text_colored"
 
-    # 将纯文本版本保存到快照文件
+    # Save the plain text version to the snapshot file
     echo "$output_text_plain" > "$XRAY_INFO_FILE"
     info "以上配置信息已保存至: $XRAY_INFO_FILE"
 }
@@ -135,8 +195,8 @@ show_config() {
     if [ ! -f "$XRAY_INFO_FILE" ]; then
         error "未找到配置快照文件。请先至少成功执行一次安装。"
     fi
-    
-    # 直接输出快照文件的内容，并通过 sed 添加颜色
+
+    # Directly output the content of the snapshot file and add color with sed
     cat "$XRAY_INFO_FILE" | sed \
         -e "s/--- VLESS Reality 服务器配置 ---/${green}&${none}/" \
         -e "s/节点名 (Name) = /${yellow}&${cyan}/" \
@@ -160,7 +220,7 @@ install_xray() {
             read -p "检测到双栈网络, 请选择用于连接的网络栈 [默认: 4 (IPv4)]: (4/6) " p_netstack
             [ -z "$p_netstack" ] && p_netstack=4
         elif [[ -n "$IPv4" ]]; then p_netstack=4; else p_netstack=6; fi
-        
+
         read -p "请输入监听端口 [1024-65535, 默认: 443]: " p_port; [ -z "$p_port" ] && p_port=443
         read -p "请输入SNI域名 [默认: learn.microsoft.com]: " p_sni; [ -z "$p_sni" ] && p_sni="learn.microsoft.com"
         read -p "请输入UUID [留空则自动生成]: " p_uuid
@@ -173,7 +233,7 @@ install_xray() {
     fi
     if [[ "$p_netstack" == "4" ]]; then ip=$IPv4; else ip=$IPv6; fi
     if [[ -z "$ip" ]]; then error "无法获取到任何公网IP地址。"; fi
-    
+
     if [[ -z "$p_port" ]]; then p_port=443; fi
     if [[ -z "$p_sni" ]]; then p_sni="learn.microsoft.com"; fi
 
@@ -200,23 +260,35 @@ install_xray() {
     echo -e "$yellow  UUID: ${cyan}${p_uuid}${none}"
     echo -e "$yellow  SNI: ${cyan}${p_sni}${none}"
     echo "----------------------------------------------------------------"
-    
+
     if [ "$IS_INTERACTIVE" = "true" ]; then
         read -p "确认以上配置并开始安装吗? (y/n): " confirm
         if [[ ! "$confirm" =~ ^[yY](es)?$ ]]; then info "安装已取消。"; exit 0; fi
     fi
 
-    install_dependencies
-    info "安装最新版本的 Xray-core..."
-    bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
-    
-    local keys=$($XRAY_BIN_FILE x25519)
-    local private_key=$(echo "$keys" | awk '/Private key:/ {print $3}')
-    local public_key=$(echo "$keys" | awk '/Public key:/ {print $3}')
-    local shortid="20220701"
-    local flow_text="xtls-rprx-vision" # <-- 使用独立变量，确保安全
+    info "--- 步骤 1/4: 启用 BBR 加速 ---"
+    enable_bbr
+    if [[ $? -ne 0 ]]; then
+        warn "BBR 启用失败或不受支持, 但安装将继续。您可以稍后手动配置。"
+    fi
 
-    info "配置 /usr/local/etc/xray/config.json..."
+
+    info "--- 步骤 2/4: 安装依赖 ---"
+    install_dependencies
+
+    info "--- 步骤 3/4: 安装 Xray-core ---"
+    bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install
+
+    local keys
+    keys=$($XRAY_BIN_FILE x25519)
+    local private_key
+    private_key=$(echo "$keys" | awk '/Private key:/ {print $3}')
+    local public_key
+    public_key=$(echo "$keys" | awk '/Public key:/ {print $3}')
+    local shortid="20220701"
+    local flow_text="xtls-rprx-vision" # <-- Use a separate variable for security
+
+    info "--- 步骤 4/4: 配置 Xray ---"
     cat > $XRAY_CONFIG_FILE <<-EOF
     {
       "log": { "loglevel": "warning" },
@@ -292,24 +364,25 @@ install_dependencies() {
 }
 
 display_help() {
-    echo "Xray-Reality 一键管理脚本 V4.2"
+    echo "Xray-Reality 一键管理脚本 V4.3"
     echo "----------------------------------------"
     echo "用法: $0 [动作] [选项]"
     echo
     echo "主要动作:"
-    echo "  --install            执行安装流程 (可配合安装选项)。"
-    echo "  --uninstall          执行卸载流程。"
-    echo "  --update             更新Xray核心和GeoData。"
-    echo "  --restart            重启Xray服务。"
-    echo "  --logs               查看实时日志。"
-    echo "  --show               显示上次安装的配置快照。"
-    echo "  -h, --help           显示此帮助菜单。"
+    echo "  --install        执行安装流程 (可配合安装选项)。"
+    echo "  --uninstall      执行卸载流程。"
+    echo "  --update         更新Xray核心和GeoData。"
+    echo "  --restart        重启Xray服务。"
+    echo "  --logs           查看实时日志。"
+    echo "  --show           显示上次安装的配置快照。"
+    echo "  --enable-bbr     尝试为系统启用 BBR 加速。"
+    echo "  -h, --help       显示此帮助菜单。"
     echo
     echo "安装选项 (需配合 --install):"
-    echo "  --netstack <4|6>     网络栈 (默认: 自动检测)。"
-    echo "  --port <端口>        监听端口 (默认: 443)。"
-    echo "  --uuid <UUID>        用户UUID (默认: 自动生成)。"
-    echo "  --sni <域名>         SNI域名 (默认: learn.microsoft.com)。"
+    echo "  --netstack <4|6> 网络栈 (默认: 自动检测)。"
+    echo "  --port <端口>    监听端口 (默认: 443)。"
+    echo "  --uuid <UUID>    用户UUID (默认: 自动生成)。"
+    echo "  --sni <域名>     SNI域名 (默认: learn.microsoft.com)。"
     echo
     echo "如果不带任何参数运行, 将显示交互式主菜单。"
     exit 0
@@ -346,6 +419,7 @@ if [[ $# -gt 0 ]]; then
         --restart) ACTION="restart";;
         --logs) ACTION="logs";;
         --show) ACTION="show";;
+        --enable-bbr) ACTION="enable_bbr";;
         -h|--help) display_help;;
         *) error "未知动作: $1. 请使用 --help 查看可用命令。";;
     esac
@@ -357,7 +431,7 @@ IPv6=$(curl -6s -m 2 https://www.cloudflare.com/cdn-cgi/trace | grep -oP 'ip=\K.
 
 main_menu() {
     clear
-    echo "Xray-Reality 一键管理脚本 V4.2"
+    echo "Xray-Reality 一键管理脚本 V4.3"
     echo "----------------------------------------"
     if [ -f "$XRAY_BIN_FILE" ]; then
         echo -e "当前状态: $green已安装$none"
@@ -373,9 +447,10 @@ main_menu() {
     echo "[4] 重启 Xray 服务"
     echo "[5] 查看 Xray 日志"
     echo "[6] 显示当前配置"
-    echo "[7] 退出脚本"
+    echo "[7] 启用 BBR 加速"
+    echo "[8] 退出脚本"
     echo "----------------------------------------"
-    read -p "请输入选项 [1-7]: " choice
+    read -p "请输入选项 [1-8]: " choice
 
     case "$choice" in
         1) ACTION="install";;
@@ -384,8 +459,9 @@ main_menu() {
         4) ACTION="restart";;
         5) ACTION="logs";;
         6) ACTION="show";;
-        7) exit 0;;
-        *) error "无效输入,请输入 1-7 之间的数字。";;
+        7) ACTION="enable_bbr";;
+        8) exit 0;;
+        *) error "无效输入,请输入 1-8 之间的数字。";;
     esac
 }
 
@@ -400,4 +476,5 @@ case "$ACTION" in
     restart) restart_xray;;
     logs) view_logs;;
     show) show_config;;
+    enable_bbr) enable_bbr;;
 esac
