@@ -230,7 +230,7 @@ view_subscription_info() {
 main_menu() {
     while true; do
         clear
-        echo -e "$cyan Xray VLESS-Reality-Vision 多功能管理脚本$none"
+        echo -e "$cyan Xray VLESS-Reality 多功能管理脚本$none"
         echo "---------------------------------------------"
         check_xray_status
         echo -e "${xray_status_info}"
