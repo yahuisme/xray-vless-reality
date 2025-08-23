@@ -1,1 +1,26 @@
 # xray-vless-reality
+
+基于 Xray 核心的 VLESS-reality 极简一键安装脚本
+
+## 脚本特点
+
+1. 交互管理菜单
+2. 交互安装可自定义端口、UUID 和 sni 网址
+3. 支持一键无交互安装
+4. 支持修改配置参数
+5. 支持菜单更新和卸载
+6. 极简纯净高效
+
+## 交互安装
+
+```
+bash <(curl -L https://raw.githubusercontent.com/yahuisme/xray-vless-reality/main/install.sh)
+```
+
+## 带参数无交互安装
+
+```
+bash <(curl -L https://raw.githubusercontent.com/yahuisme/xray-vless-reality/main/install.sh) 12345 d0f6a483-51b3-44eb-94b6-1f5fc9272c81 www.sega.com
+```
+
+自行替换端口、UUID 和 sni 网址即可实现一键无交互安装，直接输出订阅链接。
