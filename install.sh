@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Xray VLESS-Reality 多功能管理脚本
+# Xray VLESS-Reality 极简管理脚本
 
 # --- 颜色定义 ---
 red='\e[91m'
@@ -86,11 +86,14 @@ modify_config() {
 
 uninstall_xray() {
     if [[ ! -f "$xray_binary_path" ]]; then error "错误: Xray 未安装，无需卸载。" && return; fi
-    read -p "您确定要卸载 Xray 吗？[y/N]: " confirm
-    if [[ $confirm =~ ^[yY]$ ]]; then
+    # *** 优化: 修改确认为默认Y, 仅输入n/N时取消 ***
+    read -p "您确定要卸载 Xray 吗？这将删除所有相关文件。[Y/n]: " confirm
+    if [[ $confirm =~ ^[nN]$ ]]; then
+        info "卸载操作已取消。"
+    else
         info "正在卸载 Xray..."; bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ remove --purge &> /dev/null &
         spinner $!; wait $!; rm -f ~/xray_vless_reality_link.txt; success "Xray 已成功卸载。"
-    else info "卸载操作已取消。"; fi
+    fi
 }
 
 restart_xray() {
@@ -157,7 +160,7 @@ get_subscription_link() {
     local public_key=$(echo -n "${private_key}" | $xray_binary_path x25519 | awk '/Public key:/ {print $3}')
     local ip=$(curl -4s https://www.cloudflare.com/cdn-cgi/trace | grep -oP 'ip=\K.*$' || curl -6s https://www.cloudflare.com/cdn-cgi/trace | grep -oP 'ip=\K.*$')
     local display_ip=$ip && [[ $ip =~ ":" ]] && display_ip="[$ip]"
-    local link_name_encoded=$(echo "$(hostname) X-reality" | sed 's / /%20/g')
+    local link_name_encoded=$(echo "$(hostname) X-reality" | sed 's/ /%20/g')
     echo "vless://${uuid}@${display_ip}:${port}?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&sni=${domain}&fp=random&pbk=${public_key}&sid=${shortid}#${link_name_encoded}"
 }
 
@@ -172,7 +175,7 @@ non_interactive_install() {
 main_menu() {
     while true; do
         clear
-        echo -e "$cyan Xray VLESS-Reality 多功能管理脚本$none"
+        echo -e "$cyan Xray VLESS-Reality 极简管理脚本$none"
         echo "---------------------------------------------"
         check_xray_status
         echo -e "${xray_status_info}"
@@ -188,7 +191,6 @@ main_menu() {
         printf "  ${green}%-2s${none} %-35s\n" "0." "退出脚本"
         echo "---------------------------------------------"
         read -p "请输入选项 [0-7]: " choice
-
         case $choice in
             1) install_xray ;; 2) update_xray ;; 3) modify_config ;; 4) uninstall_xray ;;
             5) restart_xray ;; 6) view_xray_log ;; 7) view_subscription_info ;; 0) success "感谢使用！"; exit 0 ;;
@@ -199,7 +201,6 @@ main_menu() {
 
 # --- 脚本入口 ---
 pre_check
-# 如果带了3个或更多参数，则执行无交互安装，否则进入主菜单
 if [ "$#" -ge 3 ]; then
     non_interactive_install "$1" "$2" "$3"
 else
