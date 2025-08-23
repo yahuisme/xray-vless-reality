@@ -23,4 +23,4 @@ bash <(curl -L https://raw.githubusercontent.com/yahuisme/xray-vless-reality/mai
 bash <(curl -L https://raw.githubusercontent.com/yahuisme/xray-vless-reality/main/install.sh) 12345 d0f6a483-51b3-44eb-94b6-1f5fc9272c81 www.sega.com
 ```
 
-自行替换端口、UUID 和 sni 网址即可实现一键无交互安装，直接输出订阅链接。
+可实现一键无交互安装，直接输出订阅链接。自行替换端口、UUID 和 sni 网址。
