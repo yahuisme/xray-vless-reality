@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Xray VLESS-Reality 极简管理脚本
+# Xray VLESS-Reality 极简安装管理脚本
 
 # --- 颜色定义 ---
 red='\e[91m'
@@ -119,8 +119,15 @@ view_subscription_info() {
     echo "${vless_url}" > ~/xray_vless_reality_link.txt
     echo "----------------------------------------------------------------"
     echo -e "$green --- Xray VLESS-Reality 订阅信息 --- $none"
-    echo -e "$yellow 地址: $cyan$ip$none"; echo -e "$yellow 端口: $cyan$port$none"; echo -e "$yellow UUID: $cyan$uuid$none"
-    echo -e "$yellow SNI: $cyan$domain$none"; echo -e "$yellow 公钥: $cyan$public_key$none"; echo -e "$yellow ShortId: $cyan$shortid$none"
+    echo -e "$yellow 地址: $cyan$ip$none"
+    echo -e "$yellow 端口: $cyan$port$none"
+    echo -e "$yellow UUID: $cyan$uuid$none"
+    # *** 优化: 调整显示顺序 ***
+    echo -e "$yellow 流控 (Flow): $cyan"xtls-rprx-vision"$none"
+    echo -e "$yellow 指纹 (Fingerprint): $cyan"random"$none"
+    echo -e "$yellow SNI: $cyan$domain$none"
+    echo -e "$yellow 公钥: $cyan$public_key$none"
+    echo -e "$yellow ShortId: $cyan$shortid$none"
     echo "----------------------------------------------------------------"
     echo -e "$green 订阅链接 (已保存到 ~/xray_vless_reality_link.txt): $none"; echo -e "$cyan${vless_url}${none}"
     echo "----------------------------------------------------------------"
@@ -166,7 +173,6 @@ get_subscription_link() {
 non_interactive_install() {
     local port=$1 uuid=$2 domain=$3
     run_install "$port" "$uuid" "$domain"
-    # *** 优化: 调用view_subscription_info来显示完整信息 ***
     success "Xray 无交互安装成功！"
     view_subscription_info
 }
@@ -174,7 +180,7 @@ non_interactive_install() {
 main_menu() {
     while true; do
         clear
-        echo -e "$cyan Xray VLESS-Reality 极简管理脚本$none"
+        echo -e "$cyan Xray VLESS-Reality 极简安装管理脚本$none"
         echo "---------------------------------------------"
         check_xray_status
         echo -e "${xray_status_info}"
