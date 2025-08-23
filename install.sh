@@ -86,7 +86,6 @@ modify_config() {
 
 uninstall_xray() {
     if [[ ! -f "$xray_binary_path" ]]; then error "错误: Xray 未安装，无需卸载。" && return; fi
-    # *** 优化: 修改确认为默认Y, 仅输入n/N时取消 ***
     read -p "您确定要卸载 Xray 吗？这将删除所有相关文件。[Y/n]: " confirm
     if [[ $confirm =~ ^[nN]$ ]]; then
         info "卸载操作已取消。"
@@ -167,9 +166,9 @@ get_subscription_link() {
 non_interactive_install() {
     local port=$1 uuid=$2 domain=$3
     run_install "$port" "$uuid" "$domain"
-    local vless_url=$(get_subscription_link)
-    echo "${vless_url}"
-    echo "${vless_url}" > ~/xray_vless_reality_link.txt
+    # *** 优化: 调用view_subscription_info来显示完整信息 ***
+    success "Xray 无交互安装成功！"
+    view_subscription_info
 }
 
 main_menu() {
