@@ -139,7 +139,7 @@ modify_config() {
     read -p "$(echo -e "UUID (当前: ${cyan}${current_uuid}${none}): ")" uuid
     [ -z "$uuid" ] && uuid=$current_uuid
 
-    read -p "$(echo -e "SNI域名 (当前: ${cyan}${current_domain}${none}): ")" domain
+    read p "$(echo -e "SNI域名 (当前: ${cyan}${current_domain}${none}): ")" domain
     [ -z "$domain" ] && domain=$current_domain
 
     info "正在写入新配置..."
@@ -235,14 +235,14 @@ main_menu() {
         check_xray_status
         echo -e "${xray_status_info}"
         echo "---------------------------------------------"
-        printf "  %-35s\n" "1. 安装 / 更新 Xray" | sed -e "s/1\./$green""1.$none/g"
-        printf "  %-35s\n" "2. 修改 Xray 配置" | sed -e "s/2\./$cyan""2.$none/g"
-        printf "  %-35s\n" "3. 卸载 Xray" | sed -e "s/3\./$red""3.$none/g"
-        printf "  %-35s\n" "4. 重启 Xray" | sed -e "s/4\./$yellow""4.$none/g"
-        printf "  %-35s\n" "5. 查看 Xray 实时日志" | sed -e "s/5\./$magenta""5.$none/g"
-        printf "  %-35s\n" "6. 查看 VLESS Reality 订阅信息" | sed -e "s/6\./$cyan""6.$none/g"
+        printf "  ${green}%-2s${none} %-35s\n" "1." "安装 / 更新 Xray"
+        printf "  ${cyan}%-2s${none} %-35s\n" "2." "修改 Xray 配置"
+        printf "  ${red}%-2s${none} %-35s\n" "3." "卸载 Xray"
+        printf "  ${yellow}%-2s${none} %-35s\n" "4." "重启 Xray"
+        printf "  ${magenta}%-2s${none} %-35s\n" "5." "查看 Xray 实时日志"
+        printf "  ${cyan}%-2s${none} %-35s\n" "6." "查看 VLESS Reality 订阅信息"
         echo "---------------------------------------------"
-        printf "  %-35s\n" "0. 退出脚本" | sed -e "s/0\./$green""0.$none/g"
+        printf "  ${green}%-2s${none} %-35s\n" "0." "退出脚本"
         echo "---------------------------------------------"
         read -p "请输入选项 [0-6]: " choice
 
