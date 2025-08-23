@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Xray VLESS-Reality 极简安装管理脚本
+# Xray VLESS-Reality 一键安装管理脚本
 
 # --- 颜色定义 ---
 red='\e[91m'
@@ -122,14 +122,12 @@ view_subscription_info() {
     echo -e "$yellow 地址: $cyan$ip$none"
     echo -e "$yellow 端口: $cyan$port$none"
     echo -e "$yellow UUID: $cyan$uuid$none"
-    # *** 优化: 调整显示顺序并简化文字 ***
     echo -e "$yellow 流控: $cyan"xtls-rprx-vision"$none"
-    echo -e "$yellow 指纹: $cyan"random"$none"
+    echo -e "$yellow 指纹: $cyan"chrome"$none"
     echo -e "$yellow SNI: $cyan$domain$none"
     echo -e "$yellow 公钥: $cyan$public_key$none"
     echo -e "$yellow ShortId: $cyan$shortid$none"
     echo "----------------------------------------------------------------"
-    # *** 优化: 增加空行 ***
     echo -e "$green 订阅链接 (已保存到 ~/xray_vless_reality_link.txt): $none\n"
     echo -e "$cyan${vless_url}${none}"
     echo "----------------------------------------------------------------"
@@ -169,7 +167,7 @@ get_subscription_link() {
     local ip=$(curl -4s https://www.cloudflare.com/cdn-cgi/trace | grep -oP 'ip=\K.*$' || curl -6s https://www.cloudflare.com/cdn-cgi/trace | grep -oP 'ip=\K.*$')
     local display_ip=$ip && [[ $ip =~ ":" ]] && display_ip="[$ip]"
     local link_name_encoded=$(echo "$(hostname) X-reality" | sed 's/ /%20/g')
-    echo "vless://${uuid}@${display_ip}:${port}?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&sni=${domain}&fp=random&pbk=${public_key}&sid=${shortid}#${link_name_encoded}"
+    echo "vless://${uuid}@${display_ip}:${port}?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&sni=${domain}&fp=chrome&pbk=${public_key}&sid=${shortid}#${link_name_encoded}"
 }
 
 non_interactive_install() {
@@ -182,7 +180,7 @@ non_interactive_install() {
 main_menu() {
     while true; do
         clear
-        echo -e "$cyan Xray VLESS-Reality 极简安装管理脚本$none"
+        echo -e "$cyan Xray VLESS-Reality 一键安装管理脚本$none"
         echo "---------------------------------------------"
         check_xray_status
         echo -e "${xray_status_info}"
