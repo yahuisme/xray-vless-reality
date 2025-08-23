@@ -122,14 +122,16 @@ view_subscription_info() {
     echo -e "$yellow 地址: $cyan$ip$none"
     echo -e "$yellow 端口: $cyan$port$none"
     echo -e "$yellow UUID: $cyan$uuid$none"
-    # *** 优化: 调整显示顺序 ***
-    echo -e "$yellow 流控 (Flow): $cyan"xtls-rprx-vision"$none"
-    echo -e "$yellow 指纹 (Fingerprint): $cyan"random"$none"
+    # *** 优化: 调整显示顺序并简化文字 ***
+    echo -e "$yellow 流控: $cyan"xtls-rprx-vision"$none"
+    echo -e "$yellow 指纹: $cyan"random"$none"
     echo -e "$yellow SNI: $cyan$domain$none"
     echo -e "$yellow 公钥: $cyan$public_key$none"
     echo -e "$yellow ShortId: $cyan$shortid$none"
     echo "----------------------------------------------------------------"
-    echo -e "$green 订阅链接 (已保存到 ~/xray_vless_reality_link.txt): $none"; echo -e "$cyan${vless_url}${none}"
+    # *** 优化: 增加空行 ***
+    echo -e "$green 订阅链接 (已保存到 ~/xray_vless_reality_link.txt): $none\n"
+    echo -e "$cyan${vless_url}${none}"
     echo "----------------------------------------------------------------"
 }
 
