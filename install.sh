@@ -78,14 +78,17 @@ install_xray() {
     fi
     
     info "开始配置 Xray..."
-    local port uuid domain shortid default_uuid
+    local port uuid domain shortid
     
     read -p "$(echo -e "请输入端口 [1-65535] (默认: ${cyan}443${none}): ")" port
     [ -z "$port" ] && port=443
 
-    default_uuid=$(cat /proc/sys/kernel/random/uuid)
-    read -p "$(echo -e "请输入UUID (直接回车将使用下面的随机UUID):\n${cyan}${default_uuid}${none}\n:")" uuid
-    [ -z "$uuid" ] && uuid=$default_uuid
+    # *** 优化: 简化UUID提示, 留空后生成并显示结果 ***
+    read -p "$(echo -e "请输入UUID (留空将默认生成随机UUID): ")" uuid
+    if [[ -z "$uuid" ]]; then
+        uuid=$(cat /proc/sys/kernel/random/uuid)
+        info "已为您生成随机UUID: ${cyan}${uuid}${none}"
+    fi
 
     read -p "$(echo -e "请输入SNI域名 (默认: ${cyan}learn.microsoft.com${none}): ")" domain
     [ -z "$domain" ] && domain="learn.microsoft.com"
@@ -253,13 +256,13 @@ main_menu() {
         check_xray_status
         echo -e "${xray_status_info}"
         echo "---------------------------------------------"
-        printf "  ${green}%-2s${none} %-35s\n" "1." "安装 Xray (会覆盖配置)"
-        printf "  ${cyan}%-2s${none} %-35s\n" "2." "更新 Xray (仅更新核心)"
+        printf "  ${green}%-2s${none} %-35s\n" "1." "安装 Xray"
+        printf "  ${cyan}%-2s${none} %-35s\n" "2." "更新 Xray"
         printf "  ${cyan}%-2s${none} %-35s\n" "3." "修改 Xray 配置"
         printf "  ${red}%-2s${none} %-35s\n" "4." "卸载 Xray"
         printf "  ${yellow}%-2s${none} %-35s\n" "5." "重启 Xray"
-        printf "  ${magenta}%-2s${none} %-35s\n" "6." "查看 Xray 实时日志"
-        printf "  ${cyan}%-2s${none} %-35s\n" "7." "查看 VLESS Reality 订阅信息"
+        printf "  ${magenta}%-2s${none} %-35s\n" "6." "查看 Xray 日志"
+        printf "  ${cyan}%-2s${none} %-35s\n" "7." "查看 VLESS Reality 订阅"
         echo "---------------------------------------------"
         printf "  ${green}%-2s${none} %-35s\n" "0." "退出脚本"
         echo "---------------------------------------------"
