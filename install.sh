@@ -1,7 +1,6 @@
 #!/bin/bash
 
 # Xray VLESS-Reality 多功能管理脚本
-# 特点: 动态状态 | 美化菜单 | 修改配置 | 健壮性优化 | 规范化代码
 
 # --- 颜色定义 ---
 red='\e[91m'
@@ -67,10 +66,10 @@ check_xray_status() {
     xray_status_info="  Xray 状态: ${green}已安装${none} | ${service_status} | 版本: ${cyan}${xray_version}${none}"
 }
 
-# 1. 安装 / 更新 Xray
-install_update_xray() {
+# 1. 安装 Xray
+install_xray() {
     if [[ -f "$xray_binary_path" ]]; then
-        info "检测到 Xray 已安装。继续操作将更新核心并覆盖现有配置。"
+        info "检测到 Xray 已安装。继续操作将覆盖现有配置。"
         read -p "是否继续？[y/N]: " confirm
         if [[ ! $confirm =~ ^[yY]$ ]]; then
             info "操作已取消。"
@@ -79,13 +78,14 @@ install_update_xray() {
     fi
     
     info "开始配置 Xray..."
-    local port uuid domain shortid
+    local port uuid domain shortid default_uuid
     
     read -p "$(echo -e "请输入端口 [1-65535] (默认: ${cyan}443${none}): ")" port
     [ -z "$port" ] && port=443
 
-    read -p "$(echo -e "请输入UUID (直接回车将使用随机UUID):\n${cyan}$(cat /proc/sys/kernel/random/uuid)${none}\n:")" uuid
-    [ -z "$uuid" ] && uuid=$(cat /proc/sys/kernel/random/uuid)
+    default_uuid=$(cat /proc/sys/kernel/random/uuid)
+    read -p "$(echo -e "请输入UUID (直接回车将使用下面的随机UUID):\n${cyan}${default_uuid}${none}\n:")" uuid
+    [ -z "$uuid" ] && uuid=$default_uuid
 
     read -p "$(echo -e "请输入SNI域名 (默认: ${cyan}learn.microsoft.com${none}): ")" domain
     [ -z "$domain" ] && domain="learn.microsoft.com"
@@ -96,7 +96,7 @@ install_update_xray() {
     bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install &> /dev/null &
     spinner $!
     if ! wait $!; then
-        error "Xray 核心安装失败！请检查网络连接或官方脚本状态。"
+        error "Xray 核心安装失败！请检查网络连接。"
         return
     fi
     
@@ -114,16 +114,37 @@ install_update_xray() {
 EOF
     
     restart_xray
-    success "Xray 安装/更新成功！"
+    success "Xray 安装成功！"
     view_subscription_info
 }
 
-# 2. 修改配置
-modify_config() {
-    if [[ ! -f "$xray_config_path" ]]; then
-        error "错误: Xray 未安装，无法修改配置。"
+# 2. 更新 Xray
+update_xray() {
+    if [[ ! -f "$xray_binary_path" ]]; then
+        error "错误: Xray 未安装，无法执行更新。请先选择安装选项。"
         return
     fi
+    
+    info "正在更新 Xray 核心程序..."
+    bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install &> /dev/null &
+    spinner $!
+    if ! wait $!; then
+        error "Xray 核心更新失败！请检查网络连接。"
+        return
+    fi
+
+    info "正在更新 GeoIP 和 GeoSite 数据文件..."
+    bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install-geodata &> /dev/null &
+    spinner $!
+    wait $!
+
+    restart_xray
+    success "Xray 更新成功！"
+}
+
+# 3. 修改配置
+modify_config() {
+    if [[ ! -f "$xray_config_path" ]]; then error "错误: Xray 未安装，无法修改配置。" && return; fi
     
     info "读取当前配置..."
     local current_port=$(jq -r '.inbounds[0].port' "$xray_config_path")
@@ -139,7 +160,7 @@ modify_config() {
     read -p "$(echo -e "UUID (当前: ${cyan}${current_uuid}${none}): ")" uuid
     [ -z "$uuid" ] && uuid=$current_uuid
 
-    read p "$(echo -e "SNI域名 (当前: ${cyan}${current_domain}${none}): ")" domain
+    read -p "$(echo -e "SNI域名 (当前: ${cyan}${current_domain}${none}): ")" domain
     [ -z "$domain" ] && domain=$current_domain
 
     info "正在写入新配置..."
@@ -156,12 +177,9 @@ EOF
     view_subscription_info
 }
 
-# 3. 卸载 Xray
+# 4. 卸载 Xray
 uninstall_xray() {
-    if [[ ! -f "$xray_binary_path" ]]; then
-        error "错误: Xray 未安装，无需卸载。"
-        return
-    fi
+    if [[ ! -f "$xray_binary_path" ]]; then error "错误: Xray 未安装，无需卸载。" && return; fi
     read -p "您确定要卸载 Xray 吗？[y/N]: " confirm
     if [[ $confirm =~ ^[yY]$ ]]; then
         info "正在卸载 Xray..."
@@ -175,7 +193,7 @@ uninstall_xray() {
     fi
 }
 
-# 4. 重启 Xray
+# 5. 重启 Xray
 restart_xray() {
     if [[ ! -f "$xray_binary_path" ]]; then error "错误: Xray 未安装，无法重启。" && return; fi
     info "正在重启 Xray 服务..."
@@ -184,18 +202,18 @@ restart_xray() {
     if systemctl is-active --quiet xray; then
         success "Xray 服务已成功重启！"
     else
-        error "错误: Xray 服务启动失败, 请使用菜单 5 查看日志。"
+        error "错误: Xray 服务启动失败, 请使用菜单 6 查看日志。"
     fi
 }
 
-# 5. 查看 Xray 实时日志
+# 6. 查看 Xray 实时日志
 view_xray_log() {
     if [[ ! -f "$xray_binary_path" ]]; then error "错误: Xray 未安装，无法查看日志。" && return; fi
     info "正在显示 Xray 实时日志... 按 Ctrl+C 退出。"
     journalctl -u xray -f --no-pager
 }
 
-# 6. 查看 VLESS Reality 订阅信息
+# 7. 查看 VLESS Reality 订阅信息
 view_subscription_info() {
     if [ ! -f "$xray_config_path" ]; then error "错误: 配置文件不存在, 请先安装。" && return; fi
 
@@ -205,7 +223,7 @@ view_subscription_info() {
     local domain=$(jq -r '.inbounds[0].streamSettings.realitySettings.serverNames[0]' "$xray_config_path")
     local private_key=$(jq -r '.inbounds[0].streamSettings.realitySettings.privateKey' "$xray_config_path")
     local shortid=$(jq -r '.inbounds[0].streamSettings.realitySettings.shortIds[0]' "$xray_config_path")
-    local public_key=$(echo -n "${private_key}" | $xray_binary_path x25519 -i | awk '/Public key:/ {print $3}')
+    local public_key=$(echo -n "${private_key}" | $xray_binary_path x25519 | awk '/Public key:/ {print $3}')
     local ip=$(curl -4s https://www.cloudflare.com/cdn-cgi/trace | grep -oP 'ip=\K.*$' || curl -6s https://www.cloudflare.com/cdn-cgi/trace | grep -oP 'ip=\K.*$')
     local display_ip=$ip && [[ $ip =~ ":" ]] && display_ip="[$ip]"
     local link_name_encoded=$(echo "$(hostname) X-reality" | sed 's/ /%20/g')
@@ -235,26 +253,28 @@ main_menu() {
         check_xray_status
         echo -e "${xray_status_info}"
         echo "---------------------------------------------"
-        printf "  ${green}%-2s${none} %-35s\n" "1." "安装 / 更新 Xray"
-        printf "  ${cyan}%-2s${none} %-35s\n" "2." "修改 Xray 配置"
-        printf "  ${red}%-2s${none} %-35s\n" "3." "卸载 Xray"
-        printf "  ${yellow}%-2s${none} %-35s\n" "4." "重启 Xray"
-        printf "  ${magenta}%-2s${none} %-35s\n" "5." "查看 Xray 实时日志"
-        printf "  ${cyan}%-2s${none} %-35s\n" "6." "查看 VLESS Reality 订阅信息"
+        printf "  ${green}%-2s${none} %-35s\n" "1." "安装 Xray (会覆盖配置)"
+        printf "  ${cyan}%-2s${none} %-35s\n" "2." "更新 Xray (仅更新核心)"
+        printf "  ${cyan}%-2s${none} %-35s\n" "3." "修改 Xray 配置"
+        printf "  ${red}%-2s${none} %-35s\n" "4." "卸载 Xray"
+        printf "  ${yellow}%-2s${none} %-35s\n" "5." "重启 Xray"
+        printf "  ${magenta}%-2s${none} %-35s\n" "6." "查看 Xray 实时日志"
+        printf "  ${cyan}%-2s${none} %-35s\n" "7." "查看 VLESS Reality 订阅信息"
         echo "---------------------------------------------"
         printf "  ${green}%-2s${none} %-35s\n" "0." "退出脚本"
         echo "---------------------------------------------"
-        read -p "请输入选项 [0-6]: " choice
+        read -p "请输入选项 [0-7]: " choice
 
         case $choice in
-            1) install_update_xray ;;
-            2) modify_config ;;
-            3) uninstall_xray ;;
-            4) restart_xray ;;
-            5) view_xray_log ;;
-            6) view_subscription_info ;;
+            1) install_xray ;;
+            2) update_xray ;;
+            3) modify_config ;;
+            4) uninstall_xray ;;
+            5) restart_xray ;;
+            6) view_xray_log ;;
+            7) view_subscription_info ;;
             0) success "感谢使用！"; exit 0 ;;
-            *) error "无效选项，请输入 0-6 之间的数字。" ;;
+            *) error "无效选项，请输入 0-7 之间的数字。" ;;
         esac
         read -p "按 Enter 键返回主菜单..."
     done
