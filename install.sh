@@ -3,8 +3,7 @@
 # Xray VLESS-Reality 一键安装管理脚本
 
 # --- 全局常量 ---
-SCRIPT_VERSION="v5.2"
-SCRIPT_URL="https://raw.githubusercontent.com/yahuisme/xray-vless-reality/main/install.sh"
+SCRIPT_VERSION="V-Final"
 xray_config_path="/usr/local/etc/xray/config.json"
 xray_binary_path="/usr/local/bin/xray"
 
@@ -68,12 +67,35 @@ install_xray() {
 
 update_xray() {
     if [[ ! -f "$xray_binary_path" ]]; then error "错误: Xray 未安装，无法执行更新。请先选择安装选项。" && return; fi
-    info "正在更新 Xray 核心程序..."
+    
+    info "正在检查最新版本..."
+    local current_version=$($xray_binary_path version | head -n 1 | awk '{print $2}')
+    local latest_version=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest | jq -r '.tag_name' | sed 's/v//')
+    
+    if [[ -z "$latest_version" ]]; then
+        error "获取最新版本号失败，请检查网络或稍后再试。"
+        return
+    fi
+    
+    info "当前版本: ${cyan}${current_version}${none}，最新版本: ${cyan}${latest_version}${none}"
+    
+    if [[ "$current_version" == "$latest_version" ]]; then
+        success "您的 Xray 已是最新版本，无需更新。"
+        return
+    fi
+    
+    info "发现新版本，开始更新..."
     bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install &> /dev/null &
     spinner $!; if ! wait $!; then error "Xray 核心更新失败！请检查网络连接。" && return; fi
     info "正在更新 GeoIP 和 GeoSite 数据文件..."; bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install-geodata &> /dev/null &
     spinner $!; wait $!
     restart_xray; success "Xray 更新成功！"
+}
+
+restart_xray() {
+    if [[ ! -f "$xray_binary_path" ]]; then error "错误: Xray 未安装，无法重启。" && return; fi
+    info "正在重启 Xray 服务..."; systemctl restart xray; sleep 1
+    if systemctl is-active --quiet xray; then success "Xray 服务已成功重启！"; else error "错误: Xray 服务启动失败, 请使用菜单 5 查看日志。"; fi
 }
 
 uninstall_xray() {
@@ -87,53 +109,33 @@ uninstall_xray() {
     fi
 }
 
-modify_config() {
-    if [[ ! -f "$xray_config_path" ]]; then error "错误: Xray 未安装，无法修改配置。" && return; fi
-    info "读取当前配置..."; local current_port=$(jq -r '.inbounds[0].port' "$xray_config_path")
-    local current_uuid=$(jq -r '.inbounds[0].settings.clients[0].id' "$xray_config_path")
-    local current_domain=$(jq -r '.inbounds[0].streamSettings.realitySettings.serverNames[0]' "$xray_config_path")
-    # 读取私钥和公钥
-    local private_key=$(jq -r '.inbounds[0].streamSettings.realitySettings.privateKey' "$xray_config_path")
-    local public_key=$(jq -r '.inbounds[0].streamSettings.realitySettings.publicKey' "$xray_config_path")
-
-    info "请输入新配置，直接回车则保留当前值。"; read -p "$(echo -e "端口 (当前: ${cyan}${current_port}${none}): ")" port; [ -z "$port" ] && port=$current_port
-    read -p "$(echo -e "UUID (当前: ${cyan}${current_uuid}${none}): ")" uuid; [ -z "$uuid" ] && uuid=$current_uuid
-    read -p "$(echo -e "SNI域名 (当前: ${cyan}${current_domain}${none}): ")" domain; [ -z "$domain" ] && domain=$current_domain
-
-    # 写入配置时传入公钥和私钥
-    write_config "$port" "$uuid" "$domain" "$private_key" "$public_key"; 
-    restart_xray; 
-    success "配置修改成功！"; 
-    view_subscription_info
-}
-
-restart_xray() {
-    if [[ ! -f "$xray_binary_path" ]]; then error "错误: Xray 未安装，无法重启。" && return; fi
-    info "正在重启 Xray 服务..."; systemctl restart xray; sleep 1
-    if systemctl is-active --quiet xray; then success "Xray 服务已成功重启！"; else error "错误: Xray 服务启动失败, 请使用菜单 6 查看日志。"; fi
-}
-
 view_xray_log() {
     if [[ ! -f "$xray_binary_path" ]]; then error "错误: Xray 未安装，无法查看日志。" && return; fi
     info "正在显示 Xray 实时日志... 按 Ctrl+C 退出。"; journalctl -u xray -f --no-pager
 }
 
+modify_config() {
+    if [[ ! -f "$xray_config_path" ]]; then error "错误: Xray 未安装，无法修改配置。" && return; fi
+    info "读取当前配置..."; local current_port=$(jq -r '.inbounds[0].port' "$xray_config_path")
+    local current_uuid=$(jq -r '.inbounds[0].settings.clients[0].id' "$xray_config_path")
+    local current_domain=$(jq -r '.inbounds[0].streamSettings.realitySettings.serverNames[0]' "$xray_config_path")
+    local private_key=$(jq -r '.inbounds[0].streamSettings.realitySettings.privateKey' "$xray_config_path")
+    local public_key=$(jq -r '.inbounds[0].streamSettings.realitySettings.publicKey' "$xray_config_path")
+    info "请输入新配置，直接回车则保留当前值。"; read -p "$(echo -e "端口 (当前: ${cyan}${current_port}${none}): ")" port; [ -z "$port" ] && port=$current_port
+    read -p "$(echo -e "UUID (当前: ${cyan}${current_uuid}${none}): ")" uuid; [ -z "$uuid" ] && uuid=$current_uuid
+    read -p "$(echo -e "SNI域名 (当前: ${cyan}${current_domain}${none}): ")" domain; [ -z "$domain" ] && domain=$current_domain
+    write_config "$port" "$uuid" "$domain" "$private_key" "$public_key"; restart_xray; success "配置修改成功！"; view_subscription_info
+}
+
 view_subscription_info() {
     if [ ! -f "$xray_config_path" ]; then error "错误: 配置文件不存在, 请先安装。" && return; fi
     info "正在从配置文件生成订阅信息..."; 
-    
-    # 直接从配置文件读取所有需要的信息
     local uuid=$(jq -r '.inbounds[0].settings.clients[0].id' "$xray_config_path")
     local port=$(jq -r '.inbounds[0].port' "$xray_config_path")
     local domain=$(jq -r '.inbounds[0].streamSettings.realitySettings.serverNames[0]' "$xray_config_path")
     local public_key=$(jq -r '.inbounds[0].streamSettings.realitySettings.publicKey' "$xray_config_path")
     local shortid=$(jq -r '.inbounds[0].streamSettings.realitySettings.shortIds[0]' "$xray_config_path")
-    
-    if [[ -z "$public_key" ]]; then
-        error "配置文件中缺少公钥信息,可能是旧版配置,请重新安装以修复。"
-        return
-    fi
-
+    if [[ -z "$public_key" ]]; then error "配置文件中缺少公钥信息,可能是旧版配置,请重新安装以修复。" && return; fi
     local ip=$(curl -4s https://www.cloudflare.com/cdn-cgi/trace | grep -oP 'ip=\K.*$' || curl -6s https://www.cloudflare.com/cdn-cgi/trace | grep -oP 'ip=\K.*$')
     local display_ip=$ip && [[ $ip =~ ":" ]] && display_ip="[$ip]"
     local link_name_encoded=$(echo "$(hostname) X-reality" | sed 's/ /%20/g')
@@ -150,42 +152,13 @@ view_subscription_info() {
     echo "----------------------------------------------------------------"
 }
 
-update_script() {
-    info "正在检查脚本更新...";
-    local tmp_file="/tmp/install.sh.tmp"
-    if ! curl -sL "$SCRIPT_URL" -o "$tmp_file"; then error "下载新版脚本失败！请检查网络连接。" && return; fi
-    if [[ ! -s "$tmp_file" ]]; then error "下载的文件为空，更新失败。" && rm -f "$tmp_file" && return; fi
-    chmod +x "$tmp_file"; mv "$tmp_file" "$0"; success "脚本已更新！将自动重启以加载新版本..."; sleep 2; exec "$0"
-}
-
 # --- 核心逻辑函数 ---
 write_config() {
     local port=$1 uuid=$2 domain=$3 private_key=$4 public_key=$5 shortid="20220701"
-    # 将公钥也写入配置文件中，作为信息源
     local config_content=$(jq -n \
-        --argjson port "$port" \
-        --arg uuid "$uuid" \
-        --arg domain "$domain" \
-        --arg private_key "$private_key" \
-        --arg public_key "$public_key" \
-        --arg shortid "$shortid" \
-        '{
-          "log": {"loglevel": "warning"},
-          "inbounds": [{
-            "listen": "0.0.0.0", "port": $port, "protocol": "vless",
-            "settings": {"clients": [{"id": $uuid, "flow": "xtls-rprx-vision"}], "decryption": "none"},
-            "streamSettings": {
-              "network": "tcp", "security": "reality",
-              "realitySettings": {
-                "show": false, "dest": ($domain + ":443"), "xver": 0,
-                "serverNames": [$domain], "privateKey": $private_key, "publicKey": $public_key,
-                "shortIds": [$shortid]
-              }
-            },
-            "sniffing": {"enabled": true, "destOverride": ["http", "tls", "quic"]}
-          }],
-          "outbounds": [{"protocol": "freedom"}]
-        }')
+        --argjson port "$port" --arg uuid "$uuid" --arg domain "$domain" \
+        --arg private_key "$private_key" --arg public_key "$public_key" --arg shortid "$shortid" \
+        '{ "log": {"loglevel": "warning"}, "inbounds": [{"listen": "0.0.0.0", "port": $port, "protocol": "vless", "settings": {"clients": [{"id": $uuid, "flow": "xtls-rprx-vision"}], "decryption": "none"}, "streamSettings": {"network": "tcp", "security": "reality", "realitySettings": {"show": false, "dest": ($domain + ":443"), "xver": 0, "serverNames": [$domain], "privateKey": $private_key, "publicKey": $public_key, "shortIds": [$shortid]}}, "sniffing": {"enabled": true, "destOverride": ["http", "tls", "quic"]}}], "outbounds": [{"protocol": "freedom"}] }')
     echo "$config_content" > "$xray_config_path"
 }
 
@@ -198,10 +171,8 @@ run_install() {
     local key_pair=$($xray_binary_path x25519)
     local private_key=$(echo "$key_pair" | awk '/Private key:/ {print $3}')
     local public_key=$(echo "$key_pair" | awk '/Public key:/ {print $3}')
-    
     info "正在写入 Xray 配置文件..."; 
     write_config "$port" "$uuid" "$domain" "$private_key" "$public_key"
-    
     info "正在启动 Xray 服务..."; systemctl restart xray; sleep 1
     if ! systemctl is-active --quiet xray; then error "Xray 服务启动失败！"; exit 1; fi
 }
@@ -223,21 +194,25 @@ main_menu() {
         echo "---------------------------------------------"
         printf "  ${green}%-2s${none} %-35s\n" "1." "安装 Xray"
         printf "  ${cyan}%-2s${none} %-35s\n" "2." "更新 Xray"
-        printf "  ${red}%-2s${none} %-35s\n" "3." "卸载 Xray"
-        printf "  ${cyan}%-2s${none} %-35s\n" "4." "重启 Xray"
-        printf "  ${yellow}%-2s${none} %-35s\n" "5." "修改 Xray 配置"
-        printf "  ${magenta}%-2s${none} %-35s\n" "6." "查看 Xray 日志"
+        printf "  ${yellow}%-2s${none} %-35s\n" "3." "重启 Xray"
+        printf "  ${red}%-2s${none} %-35s\n" "4." "卸载 Xray"
+        printf "  ${magenta}%-2s${none} %-35s\n" "5." "查看 Xray 日志"
+        printf "  ${cyan}%-2s${none} %-35s\n" "6." "修改节点配置"
         printf "  ${cyan}%-2s${none} %-35s\n" "7." "查看订阅信息"
-        printf "  ${green}%-2s${none} %-35s\n" "8." "升级脚本"
         echo "---------------------------------------------"
         printf "  ${green}%-2s${none} %-35s\n" "0." "退出脚本"
         echo "---------------------------------------------"
-        read -p "请输入选项 [0-8]: " choice
+        read -p "请输入选项 [0-7]: " choice
         case $choice in
-            1) install_xray ;; 2) update_xray ;; 3) uninstall_xray ;; 4) restart_xray ;;
-            5) modify_config ;; 6) view_xray_log ;; 7) view_subscription_info ;; 8) update_script ;;
+            1) install_xray ;; 
+            2) update_xray ;; 
+            3) restart_xray ;; 
+            4) uninstall_xray ;;
+            5) view_xray_log ;; 
+            6) modify_config ;; 
+            7) view_subscription_info ;;
             0) success "感谢使用！"; exit 0 ;;
-            *) error "无效选项，请输入 0-8 之间的数字。" ;;
+            *) error "无效选项，请输入 0-7 之间的数字。" ;;
         esac; read -p "按 Enter 键返回主菜单..."
     done
 }
