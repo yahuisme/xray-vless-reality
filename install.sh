@@ -24,11 +24,15 @@ info() { echo -e "\n$yellow$1$none\n"; }
 success() { echo -e "\n$green$1$none\n"; }
 
 spinner() {
-    local pid=$1; local spinstr='|/-\-';
+    local pid=$1; local spinstr='|/-\-'
     while ps -p $pid > /dev/null; do
-        local temp=${spinstr#?}; printf " [%c]  " "$spinstr";
-        local spinstr=$temp${spinstr%"$temp"}; sleep 0.1; printf "\r";
-    done; printf "    \r";
+        local temp=${spinstr#?}
+        printf " [%c]  " "$spinstr"
+        local spinstr=$temp${spinstr%"$temp"}
+        sleep 0.1
+        printf "\r"
+    done
+    printf "    \r"
 }
 
 pre_check() {
@@ -51,7 +55,8 @@ check_xray_status() {
 # --- 菜单功能函数 ---
 install_xray() {
     if [[ -f "$xray_binary_path" ]]; then
-        info "检测到 Xray 已安装。继续操作将覆盖现有配置。"; read -p "是否继续？[y/N]: " confirm
+        info "检测到 Xray 已安装。继续操作将覆盖现有配置。"
+        read -p "是否继续？[y/N]: " confirm
         if [[ ! $confirm =~ ^[yY]$ ]]; then info "操作已取消。"; return; fi
     fi
     info "开始配置 Xray..."
@@ -67,23 +72,23 @@ install_xray() {
 
 update_xray() {
     if [[ ! -f "$xray_binary_path" ]]; then error "错误: Xray 未安装，无法执行更新。请先选择安装选项。" && return; fi
-    
+
     info "正在检查最新版本..."
     local current_version=$($xray_binary_path version | head -n 1 | awk '{print $2}')
     local latest_version=$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases/latest | jq -r '.tag_name' | sed 's/v//')
-    
+
     if [[ -z "$latest_version" ]]; then
         error "获取最新版本号失败，请检查网络或稍后再试。"
         return
     fi
-    
+
     info "当前版本: ${cyan}${current_version}${none}，最新版本: ${cyan}${latest_version}${none}"
-    
+
     if [[ "$current_version" == "$latest_version" ]]; then
         success "您的 Xray 已是最新版本，无需更新。"
         return
     fi
-    
+
     info "发现新版本，开始更新..."
     bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install &> /dev/null &
     spinner $!; if ! wait $!; then error "Xray 核心更新失败！请检查网络连接。" && return; fi
@@ -129,7 +134,7 @@ modify_config() {
 
 view_subscription_info() {
     if [ ! -f "$xray_config_path" ]; then error "错误: 配置文件不存在, 请先安装。" && return; fi
-    info "正在从配置文件生成订阅信息..."; 
+    info "正在从配置文件生成订阅信息...";
     local uuid=$(jq -r '.inbounds[0].settings.clients[0].id' "$xray_config_path")
     local port=$(jq -r '.inbounds[0].port' "$xray_config_path")
     local domain=$(jq -r '.inbounds[0].streamSettings.realitySettings.serverNames[0]' "$xray_config_path")
@@ -138,27 +143,72 @@ view_subscription_info() {
     if [[ -z "$public_key" ]]; then error "配置文件中缺少公钥信息,可能是旧版配置,请重新安装以修复。" && return; fi
     local ip=$(curl -4s https://www.cloudflare.com/cdn-cgi/trace | grep -oP 'ip=\K.*$' || curl -6s https://www.cloudflare.com/cdn-cgi/trace | grep -oP 'ip=\K.*$')
     local display_ip=$ip && [[ $ip =~ ":" ]] && display_ip="[$ip]"
-    local link_name_encoded=$(echo "$(hostname) X-reality" | sed 's/ /%20/g')
+    # 修改: 定义清晰的名称变量
+    local link_name="$(hostname) X-reality"
+    local link_name_encoded=$(echo "$link_name" | sed 's/ /%20/g')
     local vless_url="vless://${uuid}@${display_ip}:${port}?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&sni=${domain}&fp=chrome&pbk=${public_key}&sid=${shortid}#${link_name_encoded}"
-    
+
     echo "${vless_url}" > ~/xray_vless_reality_link.txt
     echo "----------------------------------------------------------------"
     echo -e "$green --- Xray VLESS-Reality 订阅信息 --- $none"
-    echo -e "$yellow 地址: $cyan$ip$none"; echo -e "$yellow 端口: $cyan$port$none"; echo -e "$yellow UUID: $cyan$uuid$none"
-    echo -e "$yellow 流控: $cyan"xtls-rprx-vision"$none"; echo -e "$yellow 指纹: $cyan"chrome"$none"; echo -e "$yellow SNI: $cyan$domain$none"
-    echo -e "$yellow 公钥: $cyan$public_key$none"; echo -e "$yellow ShortId: $cyan$shortid$none"
+    # 修改: 增加名称输出
+    echo -e "$yellow 名称: $cyan$link_name$none"
+    echo -e "$yellow 地址: $cyan$ip$none"
+    echo -e "$yellow 端口: $cyan$port$none"
+    echo -e "$yellow UUID: $cyan$uuid$none"
+    echo -e "$yellow 流控: $cyan"xtls-rprx-vision"$none"
+    echo -e "$yellow 指纹: $cyan"chrome"$none"
+    echo -e "$yellow SNI: $cyan$domain$none"
+    echo -e "$yellow 公钥: $cyan$public_key$none"
+    echo -e "$yellow ShortId: $cyan$shortid$none"
     echo "----------------------------------------------------------------"
     echo -e "$green 订阅链接 (已保存到 ~/xray_vless_reality_link.txt): $none\n"; echo -e "$cyan${vless_url}${none}"
     echo "----------------------------------------------------------------"
 }
 
+
 # --- 核心逻辑函数 ---
 write_config() {
     local port=$1 uuid=$2 domain=$3 private_key=$4 public_key=$5 shortid="20220701"
+    # 在outbounds中添加 "settings": {"domainStrategy": "UseIPv4"}
     local config_content=$(jq -n \
         --argjson port "$port" --arg uuid "$uuid" --arg domain "$domain" \
         --arg private_key "$private_key" --arg public_key "$public_key" --arg shortid "$shortid" \
-        '{ "log": {"loglevel": "warning"}, "inbounds": [{"listen": "0.0.0.0", "port": $port, "protocol": "vless", "settings": {"clients": [{"id": $uuid, "flow": "xtls-rprx-vision"}], "decryption": "none"}, "streamSettings": {"network": "tcp", "security": "reality", "realitySettings": {"show": false, "dest": ($domain + ":443"), "xver": 0, "serverNames": [$domain], "privateKey": $private_key, "publicKey": $public_key, "shortIds": [$shortid]}}, "sniffing": {"enabled": true, "destOverride": ["http", "tls", "quic"]}}], "outbounds": [{"protocol": "freedom"}] }')
+        '{
+            "log": {"loglevel": "warning"},
+            "inbounds": [{
+                "listen": "0.0.0.0",
+                "port": $port,
+                "protocol": "vless",
+                "settings": {
+                    "clients": [{"id": $uuid, "flow": "xtls-rprx-vision"}],
+                    "decryption": "none"
+                },
+                "streamSettings": {
+                    "network": "tcp",
+                    "security": "reality",
+                    "realitySettings": {
+                        "show": false,
+                        "dest": ($domain + ":443"),
+                        "xver": 0,
+                        "serverNames": [$domain],
+                        "privateKey": $private_key,
+                        "publicKey": $public_key,
+                        "shortIds": [$shortid]
+                    }
+                },
+                "sniffing": {
+                    "enabled": true,
+                    "destOverride": ["http", "tls", "quic"]
+                }
+            }],
+            "outbounds": [{
+                "protocol": "freedom",
+                "settings": {
+                    "domainStrategy": "UseIPv4"
+                }
+            }]
+        }')
     echo "$config_content" > "$xray_config_path"
 }
 
@@ -167,11 +217,11 @@ run_install() {
     info "正在下载并安装 Xray 核心..."
     bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install &> /dev/null &
     spinner $!; if ! wait $!; then error "Xray 核心安装失败！请检查网络连接。"; exit 1; fi
-    info "正在生成 Reality 密钥对..."; 
+    info "正在生成 Reality 密钥对...";
     local key_pair=$($xray_binary_path x25519)
     local private_key=$(echo "$key_pair" | awk '/Private key:/ {print $3}')
     local public_key=$(echo "$key_pair" | awk '/Public key:/ {print $3}')
-    info "正在写入 Xray 配置文件..."; 
+    info "正在写入 Xray 配置文件...";
     write_config "$port" "$uuid" "$domain" "$private_key" "$public_key"
     info "正在启动 Xray 服务..."; systemctl restart xray; sleep 1
     if ! systemctl is-active --quiet xray; then error "Xray 服务启动失败！"; exit 1; fi
@@ -204,12 +254,12 @@ main_menu() {
         echo "---------------------------------------------"
         read -p "请输入选项 [0-7]: " choice
         case $choice in
-            1) install_xray ;; 
-            2) update_xray ;; 
-            3) restart_xray ;; 
+            1) install_xray ;;
+            2) update_xray ;;
+            3) restart_xray ;;
             4) uninstall_xray ;;
-            5) view_xray_log ;; 
-            6) modify_config ;; 
+            5) view_xray_log ;;
+            6) modify_config ;;
             7) view_subscription_info ;;
             0) success "感谢使用！"; exit 0 ;;
             *) error "无效选项，请输入 0-7 之间的数字。" ;;
