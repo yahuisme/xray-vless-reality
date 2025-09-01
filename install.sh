@@ -3,7 +3,7 @@
 # Xray VLESS-Reality 一键安装管理脚本
 
 # --- 全局常量 ---
-SCRIPT_VERSION="V-Final"
+SCRIPT_VERSION="V-Final-mod" # 版本已修改
 xray_config_path="/usr/local/etc/xray/config.json"
 xray_binary_path="/usr/local/bin/xray"
 
@@ -39,10 +39,12 @@ pre_check() {
     [[ $(id -u) != 0 ]] && error "错误: 您必须以root用户身份运行此脚本" && exit 1
     if [ ! -f /etc/debian_version ]; then error "错误: 此脚本仅支持 Debian/Ubuntu 及其衍生系统。" && exit 1; fi
     
-    # --- [优化点 1: 改进依赖安装逻辑] ---
     if ! command -v jq &>/dev/null || ! command -v curl &>/dev/null; then
         info "检测到缺失的依赖 (jq/curl)，正在尝试自动安装..."
-        if ! (apt-get update && apt-get install -y jq curl); then
+        # 使用 &>/dev/null 隐藏输出，并通过 spinner 显示进度
+        (apt-get update && apt-get install -y jq curl) &> /dev/null &
+        spinner $!
+        if ! command -v jq &>/dev/null || ! command -v curl &>/dev/null; then
             error "依赖 (jq/curl) 自动安装失败。请手动运行 'apt update && apt install -y jq curl' 后重试。"
             exit 1
         fi
@@ -52,13 +54,12 @@ pre_check() {
 
 check_xray_status() {
     if [[ ! -f "$xray_binary_path" ]]; then xray_status_info="  Xray 状态: ${red}未安装${none}"; return; fi
-    local xray_version=$($xray_binary_path version | head -n 1 | awk '{print $2}')
+    local xray_version=$($xray_binary_path version 2>/dev/null | head -n 1 | awk '{print $2}' || echo "未知")
     local service_status
-    if systemctl is-active --quiet xray; then service_status="${green}运行中${none}"; else service_status="${yellow}未运行${none}"; fi
+    if systemctl is-active --quiet xray 2>/dev/null; then service_status="${green}运行中${none}"; else service_status="${yellow}未运行${none}"; fi
     xray_status_info="  Xray 状态: ${green}已安装${none} | ${service_status} | 版本: ${cyan}${xray_version}${none}"
 }
 
-# --- 新增: 输入验证函数 (为非交互模式提供支持) ---
 is_valid_port() {
     local port=$1
     if [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]; then return 0; else return 1; fi
@@ -242,14 +243,23 @@ run_install() {
     info "正在下载并安装 Xray 核心..."
     bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install &> /dev/null &
     spinner $!; if ! wait $!; then error "Xray 核心安装失败！请检查网络连接。"; exit 1; fi
+    
     info "正在生成 Reality 密钥对...";
+    # --- MODIFICATION START ---
+    # 根据用户要求，使用新版 x25519 输出格式
+    # PrivateKey -> private_key
+    # Password -> public_key
     local key_pair=$($xray_binary_path x25519)
-    local private_key=$(echo "$key_pair" | awk '/Private key:/ {print $3}')
-    local public_key=$(echo "$key_pair" | awk '/Public key:/ {print $3}')
+    local private_key=$(echo "$key_pair" | awk '/PrivateKey:/ {print $2}')
+    local public_key=$(echo "$key_pair" | awk '/Password:/ {print $2}')
+    # --- MODIFICATION END ---
+    
     info "正在写入 Xray 配置文件...";
     write_config "$port" "$uuid" "$domain" "$private_key" "$public_key"
+    
     info "正在启动 Xray 服务..."; systemctl restart xray; sleep 1
     if ! systemctl is-active --quiet xray; then error "Xray 服务启动失败！"; exit 1; fi
+    
     success "Xray 安装/配置成功！"
     view_subscription_info
 }
@@ -274,38 +284,22 @@ main_menu() {
         echo "---------------------------------------------"
         read -p "请输入选项 [0-7]: " choice
         
-        # --- [优化点 4: 改进菜单交互逻辑] ---
         case $choice in
             1) install_xray; read -p "按 Enter 键返回主菜单..." ;;
             2) update_xray; read -p "按 Enter 键返回主菜单..." ;;
             3) restart_xray; read -p "按 Enter 键返回主菜单..." ;;
             4) uninstall_xray; read -p "按 Enter 键返回主菜单..." ;;
-            5) view_xray_log; read -p "按 Enter 键返回主菜单..." ;;
-            6) modify_config; read -p "按 Enter 键返回主菜单..." ;;
+            5) view_xray_log ;; # 日志查看后自动返回
+            6) modify_config ;;
             7) view_subscription_info; read -p "按 Enter 键返回主菜单..." ;;
             0) success "感谢使用！"; exit 0 ;;
-            *) error "无效选项，请输入 0-7 之间的数字。" ;;
+            *) error "无效选项，请输入 0-7 之间的数字。" && sleep 2 ;;
         esac
     done
 }
 
-# --- [优化点 2: 全新的非交互式安装逻辑] ---
-non_interactive_usage() {
-    echo -e "\n非交互式安装用法:"
-    echo -e " $(basename "$0") install [--port <端口>] [--uuid <UUID>] [--sni <域名>]\n"
-    echo -e "  所有参数均为可选。如果未提供，将使用默认值或随机生成。\n"
-    echo -e "  示例:"
-    echo -e "    # 使用随机UUID和默认端口/SNI 进行安装"
-    echo -e "    ./$(basename "$0") install"
-    echo -e "    # 指定所有参数进行安装"
-    echo -e "    ./$(basename "$0") install --port 2053 --uuid 'your-uuid' --sni 'my.domain.com'"
-}
-
 non_interactive_dispatcher() {
-    if [[ "$1" != "install" ]]; then
-        main_menu
-        return
-    fi
+    if [[ "$1" != "install" ]]; then main_menu; return; fi
     shift
 
     local port="" uuid="" domain=""
@@ -334,4 +328,9 @@ non_interactive_dispatcher() {
 
 # --- 脚本入口 ---
 pre_check
-non_interactive_dispatcher "$@"
+# 优化了非交互式调用
+if [[ $# -gt 0 ]]; then
+    non_interactive_dispatcher "$@"
+else
+    main_menu
+fi
