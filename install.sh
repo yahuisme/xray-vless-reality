@@ -196,14 +196,7 @@ view_subscription_info() {
 
 # --- 核心逻辑函数 ---
 write_config() {
-    local port=$1 uuid=$2 domain=$3 private_key=$4 public_key=$5 shortid
-    # 如果 shortid 未传递，则生成一个随机的
-    if [[ -z "$6" ]]; then
-      shortid=$(openssl rand -hex 8)
-    else
-      shortid=$6
-    fi
-    
+    local port=$1 uuid=$2 domain=$3 private_key=$4 public_key=$5 shortid="20220701"
     local config_content=$(jq -n \
         --argjson port "$port" --arg uuid "$uuid" --arg domain "$domain" \
         --arg private_key "$private_key" --arg public_key "$public_key" --arg shortid "$shortid" \
@@ -251,18 +244,14 @@ run_install() {
     bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install &> /dev/null &
     spinner $!; if ! wait $!; then error "Xray 核心安装失败！请检查网络连接。"; exit 1; fi
     
-    # --- MODIFICATION START ---
     info "正在生成 Reality 密钥对...";
-    # 使用官方推荐的 reality -g 命令，并用 jq 解析，更稳定健壮
-    local key_pair_json=$($xray_binary_path reality -g)
-    local private_key=$(echo "$key_pair_json" | jq -r '.privateKey')
-    local public_key=$(echo "$key_pair_json" | jq -r '.publicKey')
-
-    # 检查密钥是否生成成功
-    if [[ -z "$private_key" || -z "$public_key" ]]; then
-        error "Reality 密钥对生成失败！请检查 Xray 是否已正确安装。"
-        exit 1
-    fi
+    # --- MODIFICATION START ---
+    # 根据用户要求，使用新版 x25519 输出格式
+    # PrivateKey -> private_key
+    # Password -> public_key
+    local key_pair=$($xray_binary_path x25519)
+    local private_key=$(echo "$key_pair" | awk '/PrivateKey:/ {print $2}')
+    local public_key=$(echo "$key_pair" | awk '/Password:/ {print $2}')
     # --- MODIFICATION END ---
     
     info "正在写入 Xray 配置文件...";
