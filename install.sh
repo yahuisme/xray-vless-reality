@@ -231,7 +231,7 @@ write_config() {
             "outbounds": [{
                 "protocol": "freedom",
                 "settings": {
-                    "domainStrategy": "UseIPv4"
+                    "domainStrategy": "UseIPv4v6"
                 }
             }]
         }')
