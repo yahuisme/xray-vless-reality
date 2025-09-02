@@ -1,14 +1,13 @@
 # xray-vless-reality
 
-基于 Xray 核心的 VLESS-reality 极简一键安装脚本
-支持最新的后量子加密 (Post-Quantum Encryption, PQE)
+基于 Xray 核心的 VLESS-reality 极简一键安装脚本，完整支持 VLESS-Reality-PQE（后量子加密 Post-Quantum Encryption)
 
 ## 功能特点
 
 1. 交互管理菜单
 2. 可自定义端口、UUID 和 sni 网址
 3. 支持带参数一键无交互安装
-4. 支持最新的后量子加密 (Post-Quantum Encryption, PQE)
+4. 支持最新的后量子加密 (Post-Quantum Encryption)
 5. 支持菜单修改配置参数
 6. 支持菜单管理脚本
 7. 极简纯净高效
