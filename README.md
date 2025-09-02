@@ -21,7 +21,7 @@ bash <(curl -L https://raw.githubusercontent.com/yahuisme/xray-vless-reality/mai
 ## 无交互安装脚本
 
 ```
-bash <(curl -L https://raw.githubusercontent.com/yahuisme/xray-vless-reality/main/install.sh) install --port 12345 --uuid 'd0f6a483-51b3-44eb-94b6-1f5fc9272c81' --sni 'www.sega.com --pqe'
+bash <(curl -L https://raw.githubusercontent.com/yahuisme/xray-vless-reality/main/install.sh) install --port 12345 --uuid 'd0f6a483-51b3-44eb-94b6-1f5fc9272c81' --sni 'www.sega.com' --pqe
 ```
 
 可实现一键无交互安装，直接输出订阅链接。自行替换端口、UUID 和 sni 网址。
