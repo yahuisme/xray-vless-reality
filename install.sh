@@ -205,7 +205,7 @@ view_subscription_info() {
     local pqe_status_text="${red}关闭${none}"
     if [[ "$pqe_status" != "null" ]]; then
         pqe_status_text="${green}开启${none}"
-        link_name="$(hostname) X-PQE"
+        link_name="$(hostname) P-reality"
     fi
 
     local link_name_encoded=$(echo "$link_name" | sed 's/ /%20/g')
@@ -319,12 +319,12 @@ main_menu() {
         check_xray_status
         echo -e "${xray_status_info}"
         echo "---------------------------------------------"
-        printf "  ${green}%-2s${none} %-35s\n" "1." "安装 Xray (支持 PQE)"
+        printf "  ${green}%-2s${none} %-35s\n" "1." "安装 Xray"
         printf "  ${cyan}%-2s${none} %-35s\n" "2." "更新 Xray"
         printf "  ${yellow}%-2s${none} %-35s\n" "3." "重启 Xray"
         printf "  ${red}%-2s${none} %-35s\n" "4." "卸载 Xray"
         printf "  ${magenta}%-2s${none} %-35s\n" "5." "查看 Xray 日志"
-        printf "  ${cyan}%-2s${none} %-35s\n" "6." "修改节点配置 (支持 PQE)"
+        printf "  ${cyan}%-2s${none} %-35s\n" "6." "修改节点配置"
         printf "  ${cyan}%-2s${none} %-35s\n" "7." "查看订阅信息"
         echo "---------------------------------------------"
         printf "  ${green}%-2s${none} %-35s\n" "0." "退出脚本"
