@@ -4,16 +4,11 @@
 # Xray VLESS-Reality 一键安装管理脚本
 # 版本: V-Final
 # 更新日志 (V-Final):
-# - [特性] 根据用户要求，在订阅信息中完整显示 Reality 公钥。
-# - [重构] 增加 Shell 严格模式 (set -euo pipefail) 提升脚本健壮性。
-# - [重构] 引入 execute_official_script 函数，避免重复调用安装脚本。
-# - [重构] 引入更强大的 get_public_ip 函数，从多个源获取IP，避免单点故障。
-# - [优化] 引入 press_any_key_to_continue 函数，改善菜单交互体验。
-# - [优化] 将 Reality 密钥解析方式更新为 grep+cut，增强健壮性。
-# - [优化] 为 apt-get 命令增加 DEBIAN_FRONTEND=noninteractive 参数。
+# - [修正] 修复了 `write_config` 函数因使用 heredoc 方式构建 JSON 可能导致意外中断的BUG。
+#   恢复使用 jq --arg 的方式以确保配置写入的健壮性。
 # ==============================================================================
 
-# --- Shell 严格模式 ---
+# --- Shell 严格模式 (重要优化) ---
 set -euo pipefail
 
 # --- 全局常量 ---
@@ -47,6 +42,7 @@ spinner() {
     printf "    \r"
 }
 
+# [新增] 更健壮的IP获取函数
 get_public_ip() {
     local ip
     for cmd in "curl -4s --max-time 5" "wget -4qO- --timeout=5"; do
@@ -62,7 +58,7 @@ get_public_ip() {
     error "无法获取公网 IP 地址。" && return 1
 }
 
-# 统一的官方脚本执行函数
+# [新增] 统一的官方脚本执行函数
 execute_official_script() {
     local args="$1"
     # 从 URL 下载脚本内容到变量
@@ -155,11 +151,10 @@ update_xray() {
     if [[ "$current_version" == "$latest_version" ]]; then success "您的 Xray 已是最新版本，无需更新。" && return; fi
     info "发现新版本，开始更新..."
 
-    # [重构] 使用统一的执行函数
     if ! execute_official_script "install"; then error "Xray 核心更新失败！" && return; fi
 
     info "正在更新 GeoIP 和 GeoSite 数据文件..."
-    execute_official_script "install-geodata" # Geo数据更新失败不影响核心功能，不强制检查返回值
+    execute_official_script "install-geodata"
 
     restart_xray && success "Xray 更新成功！"
 }
@@ -238,7 +233,6 @@ view_subscription_info() {
     local shortid=$(jq -r '.inbounds[0].streamSettings.realitySettings.shortIds[0]' "$xray_config_path")
     if [[ -z "$public_key" ]]; then error "配置文件中缺少公钥信息,可能是旧版配置,请重新安装以修复。" && return; fi
 
-    # [重构] 使用更健壮的IP获取函数
     local ip
     ip=$(get_public_ip)
 
@@ -267,46 +261,49 @@ view_subscription_info() {
 # --- 核心逻辑函数 ---
 write_config() {
     local port=$1 uuid=$2 domain=$3 private_key=$4 public_key=$5 shortid="20220701"
-    # 使用heredoc来构建JSON，更清晰
-    read -r -d '' config_content << EOF
-{
-    "log": {"loglevel": "warning"},
-    "inbounds": [{
-        "listen": "0.0.0.0",
-        "port": ${port},
-        "protocol": "vless",
-        "settings": {
-            "clients": [{"id": "${uuid}", "flow": "xtls-rprx-vision"}],
-            "decryption": "none"
-        },
-        "streamSettings": {
-            "network": "tcp",
-            "security": "reality",
-            "realitySettings": {
-                "show": false,
-                "dest": "${domain}:443",
-                "xver": 0,
-                "serverNames": ["${domain}"],
-                "privateKey": "${private_key}",
-                "publicKey": "${public_key}",
-                "shortIds": ["${shortid}"]
+    # [修正] 恢复使用 jq --arg 的方式构建JSON，此方法比 heredoc 更健壮，可避免因变量内容导致JSON格式错误。
+    jq -n \
+        --argjson port "$port" \
+        --arg uuid "$uuid" \
+        --arg domain "$domain" \
+        --arg private_key "$private_key" \
+        --arg public_key "$public_key" \
+        --arg shortid "$shortid" \
+    '{
+        "log": {"loglevel": "warning"},
+        "inbounds": [{
+            "listen": "0.0.0.0",
+            "port": $port,
+            "protocol": "vless",
+            "settings": {
+                "clients": [{"id": $uuid, "flow": "xtls-rprx-vision"}],
+                "decryption": "none"
+            },
+            "streamSettings": {
+                "network": "tcp",
+                "security": "reality",
+                "realitySettings": {
+                    "show": false,
+                    "dest": ($domain + ":443"),
+                    "xver": 0,
+                    "serverNames": [$domain],
+                    "privateKey": $private_key,
+                    "publicKey": $public_key,
+                    "shortIds": [$shortid]
+                }
+            },
+            "sniffing": {
+                "enabled": true,
+                "destOverride": ["http", "tls", "quic"]
             }
-        },
-        "sniffing": {
-            "enabled": true,
-            "destOverride": ["http", "tls", "quic"]
-        }
-    }],
-    "outbounds": [{
-        "protocol": "freedom",
-        "settings": {
-            "domainStrategy": "UseIPv4v6"
-        }
-    }]
-}
-EOF
-    # 使用jq格式化并写入文件，确保JSON格式正确
-    echo "$config_content" | jq '.' > "$xray_config_path"
+        }],
+        "outbounds": [{
+            "protocol": "freedom",
+            "settings": {
+                "domainStrategy": "UseIPv4v6"
+            }
+        }]
+    }' > "$xray_config_path"
 }
 
 run_install() {
