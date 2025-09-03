@@ -256,6 +256,7 @@ view_subscription_info() {
 # --- 核心逻辑函数 ---
 write_config() {
     local port=$1 uuid=$2 domain=$3 private_key=$4 public_key=$5 shortid="20220701"
+    # [修正] 恢复使用 jq --arg 的方式构建JSON，此方法比 heredoc 更健壮，可避免因变量内容导致JSON格式错误。
     jq -n \
         --argjson port "$port" \
         --arg uuid "$uuid" \
@@ -310,6 +311,7 @@ run_install() {
 
     info "正在生成 Reality 密钥对..."
     local key_pair=$($xray_binary_path x25519)
+    # [优化] 使用 grep+cut 提高健壮性
     local private_key=$(echo "$key_pair" | grep 'PrivateKey:' | cut -d ' ' -f2)
     local public_key=$(echo "$key_pair" | grep 'Password:' | cut -d ' ' -f2)
     if [[ -z "$private_key" || -z "$public_key" ]]; then
@@ -326,8 +328,10 @@ run_install() {
     view_subscription_info
 }
 
+# [新增] 改善交互的暂停函数
 press_any_key_to_continue() {
     echo ""
+    # -n 1: 读取1个字符; -s: 不回显; -r: 禁止反斜杠转义
     read -n 1 -s -r -p "按任意键返回主菜单..." || true
 }
 
@@ -356,7 +360,7 @@ main_menu() {
             1) install_xray ;;
             2) update_xray ;;
             3) restart_xray ;;
-            4.
+            4) uninstall_xray ;;
             5) view_xray_log; needs_pause=false ;;
             6) modify_config; needs_pause=false ;;
             7) view_subscription_info ;;
@@ -397,4 +401,5 @@ main() {
     fi
 }
 
+# 将所有参数传递给 main 函数
 main "$@"
