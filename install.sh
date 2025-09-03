@@ -2,19 +2,16 @@
 
 # ==============================================================================
 # Xray VLESS-Reality 一键安装管理脚本
-# 版本: V-Final-2.0
-# 更新日志 (V-Final-2.0):
-# - [修复] 安全地调用 get_public_ip，避免在获取IP失败时因 set -e 导致脚本意外退出。
-# - [修复] 在安装、更新、修改配置后，严格检查 xray 服务的重启结果，失败则中止流程。
-# - [优化] 使用 awk 解析 Reality 密钥对，增强脚本的健壮性。
-# - [增强] 为非交互式安装添加 --quiet / -q 参数，实现静默输出，方便自动化调用。
+# 版本: V-Final-2.1
+# 更新日志 (V-Final-2.1):
+# - [修复] 在首次安装的核心函数 `run_install` 中，补全了安装 GeoIP 和 GeoSite 数据文件的步骤。
 # ==============================================================================
 
 # --- Shell 严格模式 ---
 set -euo pipefail
 
 # --- 全局常量 ---
-readonly SCRIPT_VERSION="V-Final-2.0"
+readonly SCRIPT_VERSION="V-Final-2.1"
 readonly xray_config_path="/usr/local/etc/xray/config.json"
 readonly xray_binary_path="/usr/local/bin/xray"
 readonly xray_install_script_url="https://github.com/XTLS/Xray-install/raw/main/install-release.sh"
@@ -319,6 +316,12 @@ run_install() {
     if ! execute_official_script "install"; then
         error "Xray 核心安装失败！请检查网络连接。"
         exit 1
+    fi
+
+    info "正在安装/更新 GeoIP 和 GeoSite 数据文件..."
+    if ! execute_official_script "install-geodata"; then
+        error "Geo-data 更新失败！"
+        info "这通常不影响核心功能，您可以稍后通过更新选项(2)来重试。"
     fi
 
     info "正在生成 Reality 密钥对..."
