@@ -4,7 +4,7 @@
 # Xray VLESS-Reality 一键安装管理脚本
 # 版本: V-Final
 # 更新日志 (V-Final):
-# - [特性] 根据用户要求，修改卸载确认为“回车默认同意”，提升便捷性。
+# - [修正] 修复了修改配置后，因缺少暂停导致配置信息一闪而过的问题。
 # - [修正] 修复了 `write_config` 函数因使用 heredoc 方式构建 JSON 可能导致意外中断的BUG。
 # ==============================================================================
 
@@ -168,7 +168,6 @@ restart_xray() {
 uninstall_xray() {
     if [[ ! -f "$xray_binary_path" ]]; then error "错误: Xray 未安装，无需卸载。" && return; fi
     read -p "您确定要卸载 Xray 吗？这将删除所有相关文件。[Y/n]: " confirm
-    # [修改] 只有当用户输入 "n" 或 "N" 时才取消操作。直接回车将继续执行卸载。
     if [[ "$confirm" =~ ^[nN]$ ]]; then
         info "卸载操作已取消。"
         return
@@ -256,7 +255,6 @@ view_subscription_info() {
 # --- 核心逻辑函数 ---
 write_config() {
     local port=$1 uuid=$2 domain=$3 private_key=$4 public_key=$5 shortid="20220701"
-    # [修正] 恢复使用 jq --arg 的方式构建JSON，此方法比 heredoc 更健壮，可避免因变量内容导致JSON格式错误。
     jq -n \
         --argjson port "$port" \
         --arg uuid "$uuid" \
@@ -311,7 +309,6 @@ run_install() {
 
     info "正在生成 Reality 密钥对..."
     local key_pair=$($xray_binary_path x25519)
-    # [优化] 使用 grep+cut 提高健壮性
     local private_key=$(echo "$key_pair" | grep 'PrivateKey:' | cut -d ' ' -f2)
     local public_key=$(echo "$key_pair" | grep 'Password:' | cut -d ' ' -f2)
     if [[ -z "$private_key" || -z "$public_key" ]]; then
@@ -328,10 +325,8 @@ run_install() {
     view_subscription_info
 }
 
-# [新增] 改善交互的暂停函数
 press_any_key_to_continue() {
     echo ""
-    # -n 1: 读取1个字符; -s: 不回显; -r: 禁止反斜杠转义
     read -n 1 -s -r -p "按任意键返回主菜单..." || true
 }
 
@@ -362,7 +357,8 @@ main_menu() {
             3) restart_xray ;;
             4) uninstall_xray ;;
             5) view_xray_log; needs_pause=false ;;
-            6) modify_config; needs_pause=false ;;
+            # [修正] 去掉了 needs_pause=false，确保在显示完配置后能够暂停
+            6) modify_config ;;
             7) view_subscription_info ;;
             0) success "感谢使用！"; exit 0 ;;
             *) error "无效选项，请输入 0-7 之间的数字。" ;;
@@ -401,5 +397,4 @@ main() {
     fi
 }
 
-# 将所有参数传递给 main 函数
 main "$@"
