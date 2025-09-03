@@ -4,8 +4,8 @@
 # Xray VLESS-Reality 一键安装管理脚本
 # 版本: V-Final
 # 更新日志 (V-Final):
+# - [特性] 根据用户要求，修改卸载确认为“回车默认同意”，提升便捷性。
 # - [修正] 修复了 `write_config` 函数因使用 heredoc 方式构建 JSON 可能导致意外中断的BUG。
-#   恢复使用 jq --arg 的方式以确保配置写入的健壮性。
 # ==============================================================================
 
 # --- Shell 严格模式 (重要优化) ---
@@ -42,7 +42,6 @@ spinner() {
     printf "    \r"
 }
 
-# [新增] 更健壮的IP获取函数
 get_public_ip() {
     local ip
     for cmd in "curl -4s --max-time 5" "wget -4qO- --timeout=5"; do
@@ -58,20 +57,16 @@ get_public_ip() {
     error "无法获取公网 IP 地址。" && return 1
 }
 
-# [新增] 统一的官方脚本执行函数
 execute_official_script() {
     local args="$1"
-    # 从 URL 下载脚本内容到变量
     local script_content
     script_content=$(curl -L "$xray_install_script_url")
     if [[ -z "$script_content" ]]; then
         error "下载 Xray 官方安装脚本失败！请检查网络连接。"
         return 1
     fi
-    # 执行脚本内容
     bash -c "$script_content" @ $args &> /dev/null &
     spinner $!
-    # 等待后台进程完成并检查其退出状态
     if ! wait $!; then
         return 1
     fi
@@ -84,7 +79,6 @@ pre_check() {
 
     if ! command -v jq &>/dev/null || ! command -v curl &>/dev/null; then
         info "检测到缺失的依赖 (jq/curl)，正在尝试自动安装..."
-        # [优化] 增加 DEBIAN_FRONTEND=noninteractive
         (DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y jq curl) &> /dev/null &
         spinner $!
         if ! command -v jq &>/dev/null || ! command -v curl &>/dev/null; then
@@ -174,7 +168,8 @@ restart_xray() {
 uninstall_xray() {
     if [[ ! -f "$xray_binary_path" ]]; then error "错误: Xray 未安装，无需卸载。" && return; fi
     read -p "您确定要卸载 Xray 吗？这将删除所有相关文件。[Y/n]: " confirm
-    if [[ ! "$confirm" =~ ^[yY]$ ]]; then
+    # [修改] 只有当用户输入 "n" 或 "N" 时才取消操作。直接回车将继续执行卸载。
+    if [[ "$confirm" =~ ^[nN]$ ]]; then
         info "卸载操作已取消。"
         return
     fi
@@ -261,7 +256,6 @@ view_subscription_info() {
 # --- 核心逻辑函数 ---
 write_config() {
     local port=$1 uuid=$2 domain=$3 private_key=$4 public_key=$5 shortid="20220701"
-    # [修正] 恢复使用 jq --arg 的方式构建JSON，此方法比 heredoc 更健壮，可避免因变量内容导致JSON格式错误。
     jq -n \
         --argjson port "$port" \
         --arg uuid "$uuid" \
@@ -316,7 +310,6 @@ run_install() {
 
     info "正在生成 Reality 密钥对..."
     local key_pair=$($xray_binary_path x25519)
-    # [优化] 使用 grep+cut 提高健壮性
     local private_key=$(echo "$key_pair" | grep 'PrivateKey:' | cut -d ' ' -f2)
     local public_key=$(echo "$key_pair" | grep 'Password:' | cut -d ' ' -f2)
     if [[ -z "$private_key" || -z "$public_key" ]]; then
@@ -333,10 +326,8 @@ run_install() {
     view_subscription_info
 }
 
-# [新增] 改善交互的暂停函数
 press_any_key_to_continue() {
     echo ""
-    # -n 1: 读取1个字符; -s: 不回显; -r: 禁止反斜杠转义
     read -n 1 -s -r -p "按任意键返回主菜单..." || true
 }
 
@@ -360,15 +351,14 @@ main_menu() {
         echo "---------------------------------------------"
         read -p "请输入选项 [0-7]: " choice
 
-        # [优化] 改善菜单交互逻辑
         local needs_pause=true
         case $choice in
             1) install_xray ;;
             2) update_xray ;;
             3) restart_xray ;;
-            4) uninstall_xray ;;
-            5) view_xray_log; needs_pause=false ;; # 日志查看后自动返回
-            6) modify_config; needs_pause=false ;; # 修改配置后已显示信息，无需暂停
+            4.
+            5) view_xray_log; needs_pause=false ;;
+            6) modify_config; needs_pause=false ;;
             7) view_subscription_info ;;
             0) success "感谢使用！"; exit 0 ;;
             *) error "无效选项，请输入 0-7 之间的数字。" ;;
@@ -383,7 +373,6 @@ main_menu() {
 # --- 脚本主入口 ---
 main() {
     pre_check
-    # 非交互式安装的逻辑
     if [[ $# -gt 0 && "$1" == "install" ]]; then
         shift
         local port="" uuid="" domain=""
@@ -408,5 +397,4 @@ main() {
     fi
 }
 
-# 将所有参数传递给 main 函数
 main "$@"
