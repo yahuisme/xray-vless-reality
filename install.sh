@@ -2,21 +2,22 @@
 
 # ==============================================================================
 # Xray VLESS-Reality 一键安装管理脚本
-# 版本: V-Final
-# 更新日志 (V-Final):
-# - [修正] 修复了修改配置后，因缺少暂停导致配置信息一闪而过的问题。
-# - [修正] 修复了 `write_config` 函数因使用 heredoc 方式构建 JSON 可能导致意外中断的BUG。
+# 版本: V-Final-2.0
+# 更新日志 (V-Final-2.0):
+# - [修复] 安全地调用 get_public_ip，避免在获取IP失败时因 set -e 导致脚本意外退出。
+# - [修复] 在安装、更新、修改配置后，严格检查 xray 服务的重启结果，失败则中止流程。
+# - [优化] 使用 awk 解析 Reality 密钥对，增强脚本的健壮性。
+# - [增强] 为非交互式安装添加 --quiet / -q 参数，实现静默输出，方便自动化调用。
 # ==============================================================================
 
-# --- Shell 严格模式 (重要优化) ---
+# --- Shell 严格模式 ---
 set -euo pipefail
 
 # --- 全局常量 ---
-readonly SCRIPT_VERSION="V-Final"
+readonly SCRIPT_VERSION="V-Final-2.0"
 readonly xray_config_path="/usr/local/etc/xray/config.json"
 readonly xray_binary_path="/usr/local/bin/xray"
 readonly xray_install_script_url="https://github.com/XTLS/Xray-install/raw/main/install-release.sh"
-
 
 # --- 颜色定义 ---
 readonly red='\e[91m' green='\e[92m' yellow='\e[93m'
@@ -24,14 +25,19 @@ readonly magenta='\e[95m' cyan='\e[96m' none='\e[0m'
 
 # --- 全局变量 ---
 xray_status_info=""
+is_quiet=false
 
 # --- 辅助函数 ---
 error() { echo -e "\n$red[✖] $1$none\n" >&2; }
-info() { echo -e "\n$yellow[!] $1$none\n"; }
-success() { echo -e "\n$green[✔] $1$none\n"; }
+info() { [[ "$is_quiet" = false ]] && echo -e "\n$yellow[!] $1$none\n"; }
+success() { [[ "$is_quiet" = false ]] && echo -e "\n$green[✔] $1$none\n"; }
 
 spinner() {
     local pid=$1; local spinstr='|/-\'
+    if [[ "$is_quiet" = true ]]; then
+        wait "$pid"
+        return
+    fi
     while ps -p "$pid" > /dev/null; do
         local temp=${spinstr#?}
         printf " [%c]  " "$spinstr"
@@ -143,26 +149,29 @@ update_xray() {
     if [[ -z "$latest_version" ]]; then error "获取最新版本号失败，请检查网络或稍后再试。" && return; fi
     info "当前版本: ${cyan}${current_version}${none}，最新版本: ${cyan}${latest_version}${none}"
     if [[ "$current_version" == "$latest_version" ]]; then success "您的 Xray 已是最新版本，无需更新。" && return; fi
+    
     info "发现新版本，开始更新..."
-
     if ! execute_official_script "install"; then error "Xray 核心更新失败！" && return; fi
-
     info "正在更新 GeoIP 和 GeoSite 数据文件..."
     execute_official_script "install-geodata"
 
-    restart_xray && success "Xray 更新成功！"
+    if ! restart_xray; then return; fi
+    success "Xray 更新成功！"
 }
 
 restart_xray() {
-    if [[ ! -f "$xray_binary_path" ]]; then error "错误: Xray 未安装，无法重启。" && return; fi
+    if [[ ! -f "$xray_binary_path" ]]; then error "错误: Xray 未安装，无法重启。" && return 1; fi
     info "正在重启 Xray 服务..."
-    if systemctl restart xray; then
-        sleep 1
-        success "Xray 服务已成功重启！"
-    else
-        error "错误: Xray 服务启动失败, 请使用菜单 5 查看日志。"
+    if ! systemctl restart xray; then
+        error "错误: Xray 服务重启失败, 请使用菜单 5 查看日志检查具体原因。"
         return 1
     fi
+    sleep 1
+    if ! systemctl is-active --quiet xray; then
+        error "错误: Xray 服务启动失败, 请使用菜单 5 查看日志检查具体原因。"
+        return 1
+    fi
+    success "Xray 服务已成功重启！"
 }
 
 uninstall_xray() {
@@ -212,14 +221,18 @@ modify_config() {
     done
 
     write_config "$port" "$uuid" "$domain" "$private_key" "$public_key"
-    restart_xray
+    if ! restart_xray; then return; fi
+
     success "配置修改成功！"
     view_subscription_info
 }
 
 view_subscription_info() {
     if [ ! -f "$xray_config_path" ]; then error "错误: 配置文件不存在, 请先安装。" && return; fi
-    info "正在从配置文件生成订阅信息..."
+    
+    local ip
+    if ! ip=$(get_public_ip); then return 1; fi
+
     local uuid=$(jq -r '.inbounds[0].settings.clients[0].id' "$xray_config_path")
     local port=$(jq -r '.inbounds[0].port' "$xray_config_path")
     local domain=$(jq -r '.inbounds[0].streamSettings.realitySettings.serverNames[0]' "$xray_config_path")
@@ -227,29 +240,30 @@ view_subscription_info() {
     local shortid=$(jq -r '.inbounds[0].streamSettings.realitySettings.shortIds[0]' "$xray_config_path")
     if [[ -z "$public_key" ]]; then error "配置文件中缺少公钥信息,可能是旧版配置,请重新安装以修复。" && return; fi
 
-    local ip
-    ip=$(get_public_ip)
-
     local display_ip=$ip && [[ $ip =~ ":" ]] && display_ip="[$ip]"
     local link_name="$(hostname) X-reality"
     local link_name_encoded=$(echo "$link_name" | sed 's/ /%20/g')
     local vless_url="vless://${uuid}@${display_ip}:${port}?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&sni=${domain}&fp=chrome&pbk=${public_key}&sid=${shortid}#${link_name_encoded}"
 
-    echo "${vless_url}" > ~/xray_vless_reality_link.txt
-    echo "----------------------------------------------------------------"
-    echo -e "$green --- Xray VLESS-Reality 订阅信息 --- $none"
-    echo -e "$yellow 名称: $cyan$link_name$none"
-    echo -e "$yellow 地址: $cyan$ip$none"
-    echo -e "$yellow 端口: $cyan$port$none"
-    echo -e "$yellow UUID: $cyan$uuid$none"
-    echo -e "$yellow 流控: $cyan"xtls-rprx-vision"$none"
-    echo -e "$yellow 指纹: $cyan"chrome"$none"
-    echo -e "$yellow SNI: $cyan$domain$none"
-    echo -e "$yellow 公钥: $cyan$public_key$none"
-    echo -e "$yellow ShortId: $cyan$shortid$none"
-    echo "----------------------------------------------------------------"
-    echo -e "$green 订阅链接 (已保存到 ~/xray_vless_reality_link.txt): $none\n"; echo -e "$cyan${vless_url}${none}"
-    echo "----------------------------------------------------------------"
+    if [[ "$is_quiet" = true ]]; then
+        echo "${vless_url}"
+    else
+        echo "${vless_url}" > ~/xray_vless_reality_link.txt
+        echo "----------------------------------------------------------------"
+        echo -e "$green --- Xray VLESS-Reality 订阅信息 --- $none"
+        echo -e "$yellow 名称: $cyan$link_name$none"
+        echo -e "$yellow 地址: $cyan$ip$none"
+        echo -e "$yellow 端口: $cyan$port$none"
+        echo -e "$yellow UUID: $cyan$uuid$none"
+        echo -e "$yellow 流控: $cyan"xtls-rprx-vision"$none"
+        echo -e "$yellow 指纹: $cyan"chrome"$none"
+        echo -e "$yellow SNI: $cyan$domain$none"
+        echo -e "$yellow 公钥: $cyan$public_key$none"
+        echo -e "$yellow ShortId: $cyan$shortid$none"
+        echo "----------------------------------------------------------------"
+        echo -e "$green 订阅链接 (已保存到 ~/xray_vless_reality_link.txt): $none\n"; echo -e "$cyan${vless_url}${none}"
+        echo "----------------------------------------------------------------"
+    fi
 }
 
 # --- 核心逻辑函数 ---
@@ -309,8 +323,8 @@ run_install() {
 
     info "正在生成 Reality 密钥对..."
     local key_pair=$($xray_binary_path x25519)
-    local private_key=$(echo "$key_pair" | grep 'PrivateKey:' | cut -d ' ' -f2)
-    local public_key=$(echo "$key_pair" | grep 'Password:' | cut -d ' ' -f2)
+    local private_key=$(echo "$key_pair" | awk '/PrivateKey:/ {print $2}')
+    local public_key=$(echo "$key_pair" | awk '/Password:/ {print $2}')
     if [[ -z "$private_key" || -z "$public_key" ]]; then
         error "生成 Reality 密钥对失败！请检查 Xray 核心是否正常。"
         exit 1
@@ -319,7 +333,7 @@ run_install() {
     info "正在写入 Xray 配置文件..."
     write_config "$port" "$uuid" "$domain" "$private_key" "$public_key"
 
-    restart_xray
+    if ! restart_xray; then exit 1; fi
 
     success "Xray 安装/配置成功！"
     view_subscription_info
@@ -357,7 +371,6 @@ main_menu() {
             3) restart_xray ;;
             4) uninstall_xray ;;
             5) view_xray_log; needs_pause=false ;;
-            # [修正] 去掉了 needs_pause=false，确保在显示完配置后能够暂停
             6) modify_config ;;
             7) view_subscription_info ;;
             0) success "感谢使用！"; exit 0 ;;
@@ -381,6 +394,7 @@ main() {
                 --port) port="$2"; shift 2 ;;
                 --uuid) uuid="$2"; shift 2 ;;
                 --sni) domain="$2"; shift 2 ;;
+                --quiet|-q) is_quiet=true; shift ;;
                 *) error "未知参数: $1"; exit 1 ;;
             esac
         done
@@ -390,7 +404,6 @@ main() {
         if ! is_valid_port "$port" || ! is_valid_domain "$domain"; then
             error "参数无效。请检查端口或SNI域名格式。" && exit 1
         fi
-        info "开始非交互式安装..."
         run_install "$port" "$uuid" "$domain"
     else
         main_menu
