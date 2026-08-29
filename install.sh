@@ -1,13 +1,13 @@
 #!/bin/bash
 
 # Xray VLESS-Reality 一键安装管理脚本
-# 版本: v26.08.27
+# 版本: v26.08.29
 
 # --- Shell 严格模式 ---
 set -euo pipefail
 
 # --- 全局常量 ---
-readonly SCRIPT_VERSION="v26.08.27"
+readonly SCRIPT_VERSION="v26.08.29"
 readonly xray_config_path="/usr/local/etc/xray/config.json"
 readonly xray_binary_path="/usr/local/bin/xray"
 readonly xray_install_script_url="https://raw.githubusercontent.com/XTLS/Xray-install/e741a4f56d368afbb9e5be3361b40c4552d3710d/install-release.sh"
@@ -95,7 +95,8 @@ execute_official_script() {
 # --- 改进的验证函数 ---
 is_valid_port() {
     local port=$1
-    [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]
+    # 拒绝前导零（如 0443），避免 jq --argjson 静默改写成 443
+    [[ "$port" =~ ^([1-9][0-9]*|0)$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]
 }
 
 # 新增：检查端口是否被占用
@@ -138,7 +139,10 @@ restore_config_backup() {
     jq empty "$backup" >/dev/null 2>&1 || return 1
     cp -p "$backup" "$xray_config_path" || return 1
     apply_config_permissions || return 1
-    "$xray_binary_path" run -test -config "$xray_config_path" >/dev/null 2>&1
+    # 文件已恢复即视为成功；校验失败只警告，让上层继续尝试重启并向用户报告
+    "$xray_binary_path" run -test -config "$xray_config_path" >/dev/null 2>&1 \
+        || info "已恢复的配置文件未通过 Xray 校验，请检查 $backup。"
+    return 0
 }
 
 apply_config_permissions() {
@@ -172,23 +176,34 @@ restore_or_remove_binary() {
     fi
 }
 
+# 安装失败回滚：恢复/删除二进制，撤销全新安装时官方脚本 enable 的服务，尽量恢复服务状态
+rollback_binary_and_service() {
+    local had_binary=$1
+    restore_or_remove_binary "$had_binary" || true
+    [[ "$had_binary" == false ]] && disable_xray_service || true
+    [[ -x "$xray_binary_path" ]] && restart_xray || true
+}
+
 get_xray_version() {
     local version_output
     version_output=$("$xray_binary_path" version 2>/dev/null || true)
-    awk 'NR == 1 {print $2; exit}' <<< "$version_output"
+    # 归一化可能的 v 前缀，避免与 GitHub tag 比较时误判
+    awk 'NR == 1 {print $2; exit}' <<< "$version_output" | sed 's/^v//'
 }
 
 validate_vless_config() {
     local config_file="$1"
+    # 外层 // false 保证失败时稳定返回退出码 1（否则 jq 对空结果返回 4）
     jq -e '
-        (.inbounds | type == "array" and length > 0) and
+        (((.inbounds | type == "array" and length > 0) and
         (.inbounds[0].protocol == "vless") and
         (.inbounds[0].port | type == "number" and . >= 1 and . <= 65535) and
-        (.inbounds[0].settings.clients[0].id | type == "string" and length > 0) and
-        (.inbounds[0].streamSettings.realitySettings.serverNames[0] | type == "string" and length > 0) and
+        ((.inbounds[0].settings.clients[0].id // empty) | type == "string" and length > 0) and
+        ((.inbounds[0].streamSettings.realitySettings.serverNames[0] // empty) | type == "string" and length > 0) and
         (.inbounds[0].streamSettings.security == "reality") and
-        (.inbounds[0].streamSettings.realitySettings.privateKey | type == "string" and length > 0) and
-        (.inbounds[0].streamSettings.realitySettings.publicKey | type == "string" and length > 0)
+        ((.inbounds[0].streamSettings.realitySettings.privateKey // empty) | type == "string" and length > 0) and
+        ((.inbounds[0].streamSettings.realitySettings.publicKey // empty) | type == "string" and length > 0) and
+        ((.inbounds[0].streamSettings.realitySettings.shortIds[0] // empty) | type == "string" and length > 0)) // false)
     ' "$config_file" >/dev/null 2>&1
 }
 
@@ -202,103 +217,68 @@ validate_config_args() {
 
 # --- 改进的系统兼容性检查 ---
 check_system_compatibility() {
-    local os_release_file="/etc/os-release"
-    local debian_version_file="/etc/debian_version"
-    local lsb_release_file="/etc/lsb-release"
-    
     # 检查是否为Linux系统
     if [[ "$(uname -s)" != "Linux" ]]; then
         error "错误: 此脚本仅支持 Linux 系统。"
         return 1
     fi
-    
+
     # 支持的发行版列表
     local supported_distros=("ubuntu" "debian" "kali" "raspbian" "deepin" "mint" "elementary")
-    local distro_detected=false
-    local distro_name=""
-    local distro_version=""
-    
-    # 方法1: 检查 /etc/os-release (最标准的方法)
-    if [[ -f "$os_release_file" ]]; then
-        # shellcheck source=/etc/os-release
-        source "$os_release_file"
-        distro_name=${ID,,}
-        distro_version=${VERSION_ID:-unknown}
-        
-        # 检查是否为支持的发行版
+    local distro_detected=false distro_name="" distro_version=""
+
+    # 从 /etc/os-release 提取发行版信息（sed 提取，避免 source 泄漏全局变量）
+    if [[ -f /etc/os-release ]]; then
+        distro_name=$(sed -n 's/^ID=//p' /etc/os-release | tr -d '"' | tr '[:upper:]' '[:lower:]')
+        distro_version=$(sed -n 's/^VERSION_ID=//p' /etc/os-release | tr -d '"')
         for supported in "${supported_distros[@]}"; do
             if [[ "$distro_name" == "$supported" ]]; then
                 distro_detected=true
                 break
             fi
         done
-        
-        # 检查基于Debian的发行版
-        if [[ "$distro_detected" == false && "${ID_LIKE:-}" =~ debian|ubuntu ]]; then
+        # ID_LIKE 匹配 Debian/Ubuntu 系的派生发行版（如 Linux Mint 的 ID=linuxmint）
+        if [[ "$distro_detected" == false ]] && grep -qiE '^ID_LIKE=.*(debian|ubuntu)' /etc/os-release; then
             distro_detected=true
-            distro_name="$ID_LIKE"
         fi
     fi
-    
-    # 方法2: 检查 /etc/debian_version (Debian系特有)
-    if [[ "$distro_detected" == false && -f "$debian_version_file" ]]; then
+
+    # 兜底：/etc/debian_version 或 APT 包管理器（脚本本就硬依赖 apt 安装依赖）
+    if [[ "$distro_detected" == false && -f /etc/debian_version ]]; then
         distro_detected=true
-        distro_name="debian-based"
-        distro_version=$(<"$debian_version_file")
+        [[ -z "$distro_name" ]] && distro_name="debian-based"
+        [[ -z "$distro_version" ]] && distro_version=$(</etc/debian_version)
     fi
-    
-    # 方法3: 检查 /etc/lsb-release (备用方法)
-    if [[ "$distro_detected" == false && -f "$lsb_release_file" ]]; then
-        # shellcheck source=/etc/lsb-release
-        source "$lsb_release_file"
-        local lsb_id
-        lsb_id=${DISTRIB_ID,,}
-        for supported in "${supported_distros[@]}"; do
-            if [[ "$lsb_id" == "$supported" ]]; then
-                distro_detected=true
-                distro_name="$lsb_id"
-                distro_version="$DISTRIB_RELEASE"
-                break
-            fi
-        done
+    if [[ "$distro_detected" == false ]] && command -v apt-get &>/dev/null && command -v dpkg &>/dev/null; then
+        distro_detected=true
+        distro_name="debian-compatible"
+        info "检测到基于APT的包管理系统，假定为Debian兼容系统。"
     fi
-    
-    # 方法4: 检查包管理器 (最后的检查)
-    if [[ "$distro_detected" == false ]]; then
-        if command -v apt &>/dev/null && command -v dpkg &>/dev/null; then
-            distro_detected=true
-            distro_name="debian-compatible"
-            info "检测到基于APT的包管理系统，假定为Debian兼容系统。"
-        fi
-    fi
-    
+
     if [[ "$distro_detected" == false ]]; then
         error "错误: 未检测到支持的Linux发行版。"
         error "支持的系统: Ubuntu, Debian, Kali Linux, Raspbian, Deepin, Linux Mint, elementary OS"
         error "当前系统信息: $(uname -a)"
         return 1
     fi
-    
-    # 输出检测结果
+
     info "系统兼容性检查通过"
-    info "检测到系统: ${distro_name} ${distro_version}"
-    
+    info "检测到系统: ${distro_name:-unknown} ${distro_version:-unknown}"
+
     # 检查关键命令是否存在
     local required_commands=("systemctl" "awk" "grep" "sed" "ss" "ps" "mktemp" "install" "journalctl" "sha256sum")
     local missing_commands=()
-    
     for cmd in "${required_commands[@]}"; do
         if ! command -v "$cmd" &>/dev/null; then
             missing_commands+=("$cmd")
         fi
     done
-    
     if [[ ${#missing_commands[@]} -gt 0 ]]; then
         error "错误: 缺少必要的系统命令: ${missing_commands[*]}"
         error "请确保系统完整安装后再运行此脚本。"
         return 1
     fi
-    
+
     return 0
 }
 
@@ -340,6 +320,74 @@ check_xray_status() {
     xray_status_info="  Xray 状态: ${green}已安装${none} | ${service_status} | 版本: ${cyan}${xray_version}${none}"
 }
 
+# --- 交互输入助手（current 非空 = 修改已有配置，同名端口豁免占用检查） ---
+ask_port() {
+    local current=${1:-} port
+    while true; do
+        if [[ -n "$current" ]]; then
+            read -r -p "端口 (当前: ${cyan}${current}${none}): " port
+            [ -z "$port" ] && port=$current
+        else
+            read -r -p "请输入端口 [1-65535] (默认: ${cyan}${default_port}${none}): " port
+            [ -z "$port" ] && port=$default_port
+        fi
+        if ! is_valid_port "$port"; then
+            error "端口无效，请输入一个1-65535之间的数字。"
+            continue
+        fi
+        if [[ -z "$current" || "$port" != "$current" ]] && is_port_in_use "$port"; then
+            error "端口 $port 已被占用，请选择其他端口。"
+            continue
+        fi
+        break
+    done
+    printf '%s' "$port"
+}
+
+ask_uuid() {
+    local current=${1:-} uuid
+    while true; do
+        if [[ -n "$current" ]]; then
+            read -r -p "UUID (当前: ${cyan}${current}${none}): " uuid
+            [ -z "$uuid" ] && uuid=$current
+        else
+            read -r -p "请输入UUID (留空将默认生成随机UUID): " uuid
+            if [[ -z "$uuid" ]]; then
+                uuid=$(generate_uuid)
+                info "已为您生成随机UUID: ${cyan}${uuid}${none}"
+                break
+            fi
+        fi
+        if is_valid_uuid "$uuid"; then
+            break
+        else
+            error "UUID格式无效，请输入标准UUID格式 (如: 550e8400-e29b-41d4-a716-446655440000) 或留空自动生成。"
+        fi
+    done
+    printf '%s' "$uuid"
+}
+
+ask_domain() {
+    local current=${1:-} domain
+    while true; do
+        if [[ -n "$current" ]]; then
+            read -r -p "SNI域名 (当前: ${cyan}${current}${none}): " domain
+            [ -z "$domain" ] && domain=$current
+        else
+            read -r -p "请输入SNI域名 (默认: ${cyan}${default_sni}${none}): " domain
+            [ -z "$domain" ] && domain=$default_sni
+        fi
+        if is_valid_domain "$domain"; then break; else error "域名格式无效，请重新输入。"; fi
+    done
+    printf '%s' "$domain"
+}
+
+# 全新安装失败时，撤销官方脚本已 enable 的 xray 服务，恢复"未安装"状态
+disable_xray_service() {
+    systemctl disable --now xray 2>/dev/null || true
+    systemctl daemon-reload 2>/dev/null || true
+}
+
 # --- 菜单功能函数 ---
 install_xray() {
     if [[ -f "$xray_binary_path" ]]; then
@@ -351,40 +399,12 @@ install_xray() {
         if [[ ! $confirm =~ ^[yY]$ ]]; then info "操作已取消。"; return; fi
     fi
     info "开始配置 Xray VLESS-Reality..."
-    local port uuid domain
-
-    while true; do
-        read -r -p "请输入端口 [1-65535] (默认: ${cyan}${default_port}${none}): " port
-        [ -z "$port" ] && port=$default_port
-        if ! is_valid_port "$port"; then
-            error "端口无效，请输入一个1-65535之间的数字。"
-            continue
-        fi
-        if is_port_in_use "$port"; then
-            error "端口 $port 已被占用，请选择其他端口。"
-            continue
-        fi
-        break
-    done
-
-    while true; do
-        read -r -p "请输入UUID (留空将默认生成随机UUID): " uuid
-        if [[ -z "$uuid" ]]; then 
-            uuid=$(generate_uuid)
-            info "已为您生成随机UUID: ${cyan}${uuid}${none}"
-            break
-        elif is_valid_uuid "$uuid"; then
-            break
-        else
-            error "UUID格式无效，请输入标准UUID格式 (如: 550e8400-e29b-41d4-a716-446655440000) 或留空自动生成。"
-        fi
-    done
-
-    while true; do
-        read -r -p "请输入SNI域名 (默认: ${cyan}${default_sni}${none}): " domain
-        [ -z "$domain" ] && domain=$default_sni
-        if is_valid_domain "$domain"; then break; else error "域名格式无效，请重新输入。"; fi
-    done
+    local current_port="" port uuid domain
+    # 重装场景：读取现有配置端口，同端口重装时豁免占用检查
+    [[ -f "$xray_config_path" ]] && current_port=$(jq -r '.inbounds[0].port // empty' "$xray_config_path" 2>/dev/null || true)
+    port=$(ask_port "$current_port")
+    uuid=$(ask_uuid)
+    domain=$(ask_domain)
 
     run_install "$port" "$uuid" "$domain"
 }
@@ -422,7 +442,8 @@ update_xray() {
     fi
     if [[ ! -x "$xray_binary_path" ]] || ! "$xray_binary_path" version >/dev/null 2>&1; then
         error "更新后的 Xray 核心无法执行，正在恢复旧版本。"
-        restore_or_remove_binary true
+        restore_or_remove_binary true || true
+        restart_xray || true
         return 1
     fi
     info "正在更新 GeoIP 和 GeoSite 数据文件..."
@@ -525,37 +546,9 @@ modify_config() {
 
     info "请输入新配置，直接回车则保留当前值。"
     local port uuid domain
-    
-    while true; do
-        read -r -p "端口 (当前: ${cyan}${current_port}${none}): " port
-        [ -z "$port" ] && port=$current_port
-        if ! is_valid_port "$port"; then
-            error "端口无效，请输入一个1-65535之间的数字。"
-            continue
-        fi
-        # 如果端口没有变化，跳过占用检查
-        if [[ "$port" != "$current_port" ]] && is_port_in_use "$port"; then
-            error "端口 $port 已被占用，请选择其他端口。"
-            continue
-        fi
-        break
-    done
-    
-    while true; do
-        read -r -p "UUID (当前: ${cyan}${current_uuid}${none}): " uuid
-        [ -z "$uuid" ] && uuid=$current_uuid
-        if is_valid_uuid "$uuid"; then
-            break
-        else
-            error "UUID格式无效，请输入标准UUID格式。"
-        fi
-    done
-    
-    while true; do
-        read -r -p "SNI域名 (当前: ${cyan}${current_domain}${none}): " domain
-        [ -z "$domain" ] && domain=$current_domain
-        if is_valid_domain "$domain"; then break; else error "域名格式无效，请重新输入。"; fi
-    done
+    port=$(ask_port "$current_port")
+    uuid=$(ask_uuid "$current_uuid")
+    domain=$(ask_domain "$current_domain")
 
     if ! write_config "$port" "$uuid" "$domain" "$private_key" "$public_key"; then
         error "配置写入失败，未重启 Xray。"
@@ -566,6 +559,8 @@ modify_config() {
         if restore_config_backup; then
             restart_xray || true
             error "已恢复旧配置。"
+        else
+            error "旧配置恢复失败，请手动检查 ${xray_config_path}.bak。"
         fi
         return 1
     fi
@@ -584,12 +579,15 @@ view_subscription_info() {
     if ! ip=$(get_public_ip); then return 1; fi
 
     local uuid port domain public_key shortid
-    uuid=$(jq -r '.inbounds[0].settings.clients[0].id' "$xray_config_path")
-    port=$(jq -r '.inbounds[0].port' "$xray_config_path")
-    domain=$(jq -r '.inbounds[0].streamSettings.realitySettings.serverNames[0]' "$xray_config_path")
-    public_key=$(jq -r '.inbounds[0].streamSettings.realitySettings.publicKey' "$xray_config_path")
-    shortid=$(jq -r '.inbounds[0].streamSettings.realitySettings.shortIds[0]' "$xray_config_path")
-    if [[ -z "$public_key" ]]; then error "配置文件中缺少公钥信息,可能是旧版配置,请重新安装以修复。" && return; fi
+    uuid=$(jq -r '.inbounds[0].settings.clients[0].id // empty' "$xray_config_path")
+    port=$(jq -r '.inbounds[0].port // empty' "$xray_config_path")
+    domain=$(jq -r '.inbounds[0].streamSettings.realitySettings.serverNames[0] // empty' "$xray_config_path")
+    public_key=$(jq -r '.inbounds[0].streamSettings.realitySettings.publicKey // empty' "$xray_config_path")
+    shortid=$(jq -r '.inbounds[0].streamSettings.realitySettings.shortIds[0] // empty' "$xray_config_path")
+    if [[ -z "$public_key" || -z "$shortid" ]]; then
+        error "配置文件中缺少公钥或 ShortId 信息，可能是旧版配置，请重新安装以修复。"
+        return 1
+    fi
 
     local display_ip="$ip"
     [[ "$ip" == *:* ]] && display_ip="[$ip]"
@@ -685,14 +683,14 @@ run_install() {
     fi
     if ! execute_official_script "install"; then
         error "Xray 核心安装失败！请检查网络连接。"
-        restore_or_remove_binary "$had_binary" || true
+        rollback_binary_and_service "$had_binary"
         return 1
     fi
 
     info "正在安装/更新 GeoIP 和 GeoSite 数据文件..."
     if ! execute_official_script "install-geodata"; then
         error "GeoIP/GeoSite 数据安装失败，正在恢复旧版本。"
-        restore_or_remove_binary "$had_binary" || true
+        rollback_binary_and_service "$had_binary"
         return 1
     fi
 
@@ -700,7 +698,7 @@ run_install() {
     local key_pair
     if ! key_pair=$($xray_binary_path x25519); then
         error "生成 Reality 密钥对失败！"
-        restore_or_remove_binary "$had_binary" || true
+        rollback_binary_and_service "$had_binary"
         return 1
     fi
     local private_key public_key
@@ -708,25 +706,29 @@ run_install() {
     public_key=$(awk '/^Password( \(PublicKey\))?:/ {print $NF}' <<< "$key_pair")
     if [[ -z "$private_key" || -z "$public_key" ]]; then
         error "生成 Reality 密钥对失败！请检查 Xray 核心是否正常。"
-        restore_or_remove_binary "$had_binary" || true
+        rollback_binary_and_service "$had_binary"
         return 1
     fi
 
     info "正在写入 Xray 配置文件..."
     if ! write_config "$port" "$uuid" "$domain" "$private_key" "$public_key"; then
-        restore_or_remove_binary "$had_binary" || true
+        rollback_binary_and_service "$had_binary"
         return 1
     fi
 
     if ! restart_xray; then
         error "Xray 启动失败，正在恢复旧配置和核心。"
         if [[ "$had_config" == true ]]; then
-            restore_config_backup || true
+            if restore_config_backup; then
+                rollback_binary_and_service "$had_binary"
+                error "已恢复旧配置和核心。"
+            else
+                error "旧配置恢复失败，请手动检查 ${xray_config_path}.bak。"
+            fi
         else
             rm -f "$xray_config_path"
+            rollback_binary_and_service "$had_binary"
         fi
-        restore_or_remove_binary "$had_binary" || true
-        restart_xray || true
         return 1
     fi
 
@@ -742,7 +744,7 @@ press_any_key_to_continue() {
 
 main_menu() {
     while true; do
-        clear
+        clear 2>/dev/null || true
         printf '%b\n' "$cyan Xray VLESS-Reality 一键安装管理脚本 $SCRIPT_VERSION$none"
         echo "---------------------------------------------"
         check_xray_status
@@ -808,11 +810,14 @@ main() {
         [[ -z "$port" ]] && port=$default_port
         [[ -z "$uuid" ]] && uuid=$(generate_uuid)
         [[ -z "$domain" ]] && domain=$default_sni
-        if ! validate_config_args "$port" "$uuid" "$domain" false; then
-            error "参数无效。请检查端口、UUID或SNI域名格式。" && exit 1
-        fi
-        if is_port_in_use "$port"; then
-            error "端口 $port 已被占用，请选择其他端口。" && exit 1
+        # 同端口重装豁免占用检查（xray 自身正监听原端口）
+        local current_port=""
+        [[ -f "$xray_config_path" ]] && current_port=$(jq -r '.inbounds[0].port // empty' "$xray_config_path" 2>/dev/null || true)
+        local check_port=true
+        [[ -n "$current_port" && "$port" == "$current_port" ]] && check_port=false
+        if ! validate_config_args "$port" "$uuid" "$domain" "$check_port"; then
+            error "参数无效。请检查端口、UUID或SNI域名格式。"
+            exit 1
         fi
         run_install "$port" "$uuid" "$domain"
     else
