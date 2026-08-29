@@ -69,7 +69,7 @@ execute_official_script() {
     local script_file log_file pid result=0
     script_file=$(mktemp)
     log_file=$(mktemp)
-    trap 'rm -f "$script_file" "$log_file"' RETURN
+    trap 'rm -f -- "${script_file:-}" "${log_file:-}"' RETURN
     if ! curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
         --connect-timeout 10 --max-time 120 "$xray_install_script_url" > "$script_file"; then
         error "下载 Xray 官方安装脚本失败！请检查网络连接。"
@@ -354,7 +354,7 @@ ask_uuid() {
             read -r -p "请输入UUID (留空将默认生成随机UUID): " uuid
             if [[ -z "$uuid" ]]; then
                 uuid=$(generate_uuid)
-                info "已为您生成随机UUID: ${cyan}${uuid}${none}"
+                info "已为您生成随机UUID: ${cyan}${uuid}${none}" >&2
                 break
             fi
         fi
@@ -639,7 +639,7 @@ write_config() {
     install -d -m 0755 "$(dirname "$xray_config_path")"
     local tmp_config
     tmp_config=$(mktemp "${xray_config_path}.tmp.XXXXXX.json")
-    trap 'rm -f "$tmp_config"' RETURN
+    trap 'rm -f -- "${tmp_config:-}"' RETURN
     printf '%s\n' "$config_content" > "$tmp_config"
     test_log=$(mktemp)
     chmod 600 "$test_log"
