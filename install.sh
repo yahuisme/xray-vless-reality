@@ -46,11 +46,10 @@ spinner() {
 
 is_valid_ipv4() {
     local ip="$1" part
-    local -a parts
-    IFS='.' read -r -a parts <<< "$ip"
-    [[ ${#parts[@]} -eq 4 ]] || return 1
-    for part in "${parts[@]}"; do
-        [[ "$part" =~ ^[0-9]{1,3}$ ]] && ((10#$part <= 255)) || return 1
+    [[ "$ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || return 1
+    local IFS=.
+    for part in $ip; do
+        ((10#$part <= 255)) || return 1
     done
 }
 
@@ -409,6 +408,16 @@ install_xray() {
     run_install "$port" "$uuid" "$domain"
 }
 
+# 更新失败统一回滚：恢复旧核心并尽量重启服务
+update_failed() {
+    error "$1"
+    if restore_or_remove_binary true; then
+        restart_xray || true
+        error "已恢复更新前的 Xray 核心。"
+    fi
+    return 1
+}
+
 update_xray() {
     if [[ ! -f "$xray_binary_path" ]]; then error "错误: Xray 未安装，无法执行更新。请先选择安装选项。" && return; fi
     info "正在检查最新版本..."
@@ -436,33 +445,22 @@ update_xray() {
         return 1
     fi
     if ! execute_official_script "install"; then
-        error "Xray 核心更新失败！"
-        restore_or_remove_binary true
-        return 1
+        update_failed "Xray 核心更新失败！"
+        return
     fi
     if [[ ! -x "$xray_binary_path" ]] || ! "$xray_binary_path" version >/dev/null 2>&1; then
-        error "更新后的 Xray 核心无法执行，正在恢复旧版本。"
-        restore_or_remove_binary true || true
-        restart_xray || true
-        return 1
+        update_failed "更新后的 Xray 核心无法执行，正在恢复旧版本。"
+        return
     fi
     info "正在更新 GeoIP 和 GeoSite 数据文件..."
     if ! execute_official_script "install-geodata"; then
-        error "GeoIP/GeoSite 数据更新失败，正在恢复更新前的 Xray 核心。"
-        if restore_or_remove_binary true; then
-            restart_xray || true
-            error "已恢复更新前的 Xray 核心。"
-        fi
-        return 1
+        update_failed "GeoIP/GeoSite 数据更新失败，正在恢复更新前的 Xray 核心。"
+        return
     fi
 
     if ! restart_xray; then
-        error "更新后的 Xray 启动失败。"
-        if restore_or_remove_binary true; then
-            restart_xray || true
-            error "已恢复更新前的 Xray 核心。"
-        fi
-        return 1
+        update_failed "更新后的 Xray 启动失败。"
+        return
     fi
     rm -f "$xray_binary_backup_path"
     success "Xray 更新成功！"
@@ -769,13 +767,13 @@ main_menu() {
 
         local needs_pause=true
         case $choice in
-            1) install_xray ;;
-            2) update_xray ;;
-            3) restart_xray ;;
-            4) uninstall_xray ;;
-            5) view_xray_log; needs_pause=false ;;
-            6) modify_config ;;
-            7) view_subscription_info ;;
+            1) ( install_xray ) || true ;;
+            2) ( update_xray ) || true ;;
+            3) ( restart_xray ) || true ;;
+            4) ( uninstall_xray ) || true ;;
+            5) ( view_xray_log ) || true; needs_pause=false ;;
+            6) ( modify_config ) || true ;;
+            7) ( view_subscription_info ) || true ;;
             0) success "感谢使用！"; exit 0 ;;
             *) error "无效选项，请输入 0-7 之间的数字。" ;;
         esac
