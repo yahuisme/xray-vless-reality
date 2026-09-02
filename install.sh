@@ -1,13 +1,13 @@
 #!/bin/bash
 
 # Xray VLESS-Reality 一键安装管理脚本
-# 版本: v26.08.30
+# 版本: v26.09.02
 
 # --- Shell 严格模式 ---
 set -euo pipefail
 
 # --- 全局常量 ---
-readonly SCRIPT_VERSION="v26.08.30"
+readonly SCRIPT_VERSION="v26.09.02"
 readonly xray_config_path="/usr/local/etc/xray/config.json"
 readonly xray_binary_path="/usr/local/bin/xray"
 readonly xray_install_script_url="https://raw.githubusercontent.com/XTLS/Xray-install/e741a4f56d368afbb9e5be3361b40c4552d3710d/install-release.sh"
@@ -54,12 +54,25 @@ is_valid_ipv4() {
 }
 
 get_public_ip() {
-    local ip url
+    local ip url cache_file="/usr/local/etc/xray/.public-ip"
+    # 缓存 1 天，避免每次查看配置都发起网络请求；公网 IP 变更后自动刷新
+    if [[ -f "$cache_file" && -z "$(find "$cache_file" -mmin +1440 2>/dev/null)" ]]; then
+        ip=$(<"$cache_file")
+        [[ -n "$ip" ]] && { printf '%s\n' "$ip"; return; }
+    fi
     for url in https://api.ipify.org https://ip.sb https://checkip.amazonaws.com; do
-        ip=$(curl --fail --silent --show-error --ipv4 --max-time 5 "$url" 2>/dev/null | tr -d '[:space:]') && is_valid_ipv4 "$ip" && echo "$ip" && return
+        if ip=$(curl --fail --silent --show-error --ipv4 --max-time 5 "$url" 2>/dev/null | tr -d '[:space:]') && is_valid_ipv4 "$ip"; then
+            printf '%s\n' "$ip" > "$cache_file" 2>/dev/null || true
+            printf '%s\n' "$ip"
+            return
+        fi
     done
     for url in https://api64.ipify.org https://ip.sb; do
-        ip=$(curl --fail --silent --show-error --ipv6 --max-time 5 "$url" 2>/dev/null | tr -d '[:space:]') && [[ "$ip" =~ ^[0-9A-Fa-f:]+$ && "$ip" == *:* ]] && echo "$ip" && return
+        if ip=$(curl --fail --silent --show-error --ipv6 --max-time 5 "$url" 2>/dev/null | tr -d '[:space:]') && [[ "$ip" =~ ^[0-9A-Fa-f:]+$ && "$ip" == *:* ]]; then
+            printf '%s\n' "$ip" > "$cache_file" 2>/dev/null || true
+            printf '%s\n' "$ip"
+            return
+        fi
     done
     error "无法获取公网 IP 地址。" && return 1
 }
@@ -100,9 +113,22 @@ is_valid_port() {
 
 # 新增：检查端口是否被占用
 is_port_in_use() {
-    local port=$1
-    ss -H -ltn "sport = :$port" 2>/dev/null | grep -q . && return 0
-    ss -H -lun "sport = :$port" 2>/dev/null | grep -q . && return 0
+    local port=$1 port_in_use=false
+    if command -v ss >/dev/null 2>&1; then
+        if ss -H -ltn "sport = :$port" 2>/dev/null | grep -q . || \
+           ss -H -lun "sport = :$port" 2>/dev/null | grep -q .; then
+            port_in_use=true
+        fi
+    fi
+    # ss 不可用或版本过旧（iproute2 < 4.9 无 -H，调用失败）时回退 netstat，避免静默跳过检查
+    if [[ "$port_in_use" == false ]] && command -v netstat >/dev/null 2>&1; then
+        if netstat -tuln 2>/dev/null | awk -v p=":$port" '$4 ~ p"$" || $4 ~ p" " {found=1} END {exit !found}'; then
+            port_in_use=true
+        fi
+    fi
+    if [[ "$port_in_use" == true ]]; then
+        return 0
+    fi
     return 1
 }
 
@@ -294,7 +320,7 @@ pre_check() {
         info "检测到缺失的依赖 (jq/curl)，正在尝试自动安装..."
         local apt_log
         apt_log=$(mktemp)
-        (DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y jq curl) >"$apt_log" 2>&1 &
+        (DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 update && DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y jq curl) >"$apt_log" 2>&1 &
         local apt_pid=$!
         spinner "$apt_pid"
         wait "$apt_pid" || true
@@ -444,7 +470,7 @@ update_xray() {
         error "无法备份当前 Xray 核心，已停止更新。"
         return 1
     fi
-    if ! execute_official_script "install"; then
+    if ! execute_official_script "install" "--without-geodata"; then
         update_failed "Xray 核心更新失败！"
         return
     fi
@@ -680,7 +706,9 @@ run_install() {
             return 1
         fi
     fi
-    if ! execute_official_script "install"; then
+    # --without-geodata: 官方 install 默认已含 geodata 下载，与下方
+    # install-geodata 重复；统一由 install-geodata 负责。
+    if ! execute_official_script "install" "--without-geodata"; then
         error "Xray 核心安装失败！请检查网络连接。"
         rollback_binary_and_service "$had_binary"
         return 1
@@ -824,6 +852,8 @@ main() {
     fi
 }
 
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+# 兼容 bash <(curl ...)、直接执行与 curl ... | bash 管道方式；
+# ${BASH_SOURCE[0]:-} 兼容 set -u 下管道模式的空数组
+if [[ "${BASH_SOURCE[0]:-}" == "$0" || -z "${BASH_SOURCE[0]:-}" ]]; then
     main "$@"
 fi
