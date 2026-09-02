@@ -27,9 +27,18 @@ readonly link_file="/root/xray_vless_reality_link.txt"
 
 
 # --- 辅助函数 ---
-error() { printf '\n%b[✖] %s%b\n\n' "$red" "$1" "$none" >&2; }
+error() {
+    printf '\n%b[✖] %s%b\n\n' "$red" "$1" "$none" >&2
+    # xray-dual 同款：根据错误内容给出简单建议
+    case "$1" in
+        *"网络"*|*"下载"*) printf '%b\n' "$yellow提示: 检查网络连接或更换DNS$none" >&2 ;;
+        *"权限"*|*"root"*) printf '%b\n' "$yellow提示: 请使用 sudo 运行脚本$none" >&2 ;;
+        *"端口"*) printf '%b\n' "$yellow提示: 尝试使用其他端口号$none" >&2 ;;
+    esac
+}
 info() { printf '\n%b[!] %s%b\n' "$yellow" "$1" "$none"; }
 success() { printf '\n%b[✔] %s%b\n' "$green" "$1" "$none"; }
+warning() { printf '\n%b[⚠] %s%b\n' "$yellow" "$1" "$none"; }
 
 spinner() {
     local pid=$1; local spinstr='|/-\'
@@ -350,10 +359,10 @@ ask_port() {
     local current=${1:-} port
     while true; do
         if [[ -n "$current" ]]; then
-            read -r -p "端口 (当前: ${cyan}${current}${none}): " port
+            read -r -p " -> 新端口 (当前: ${cyan}${current}${none}, 回车保留): " port
             [ -z "$port" ] && port=$current
         else
-            read -r -p "请输入端口 [1-65535] (默认: ${cyan}${default_port}${none}): " port
+            read -r -p " -> 请输入端口 [1-65535] (默认: ${cyan}${default_port}${none}): " port
             [ -z "$port" ] && port=$default_port
         fi
         if ! is_valid_port "$port"; then
@@ -373,10 +382,10 @@ ask_uuid() {
     local current=${1:-} uuid
     while true; do
         if [[ -n "$current" ]]; then
-            read -r -p "UUID (当前: ${cyan}${current}${none}): " uuid
+            read -r -p " -> 新UUID (当前: ${cyan}${current}${none}, 回车保留): " uuid
             [ -z "$uuid" ] && uuid=$current
         else
-            read -r -p "请输入UUID (留空将默认生成随机UUID): " uuid
+            read -r -p " -> 请输入UUID (留空将自动生成): " uuid
             if [[ -z "$uuid" ]]; then
                 uuid=$(generate_uuid)
                 info "已为您生成随机UUID: ${cyan}${uuid}${none}" >&2
@@ -396,10 +405,10 @@ ask_domain() {
     local current=${1:-} domain
     while true; do
         if [[ -n "$current" ]]; then
-            read -r -p "SNI域名 (当前: ${cyan}${current}${none}): " domain
+            read -r -p " -> 新SNI域名 (当前: ${cyan}${current}${none}, 回车保留): " domain
             [ -z "$domain" ] && domain=$current
         else
-            read -r -p "请输入SNI域名 (默认: ${cyan}${default_sni}${none}): " domain
+            read -r -p " -> 请输入SNI域名 (默认: ${cyan}${default_sni}${none}): " domain
             [ -z "$domain" ] && domain=$default_sni
         fi
         if is_valid_domain "$domain"; then break; else error "域名格式无效，请重新输入。"; fi
@@ -580,10 +589,10 @@ modify_config() {
         return 1
     fi
     if ! restart_xray; then
-        error "配置修改后 Xray 启动失败，正在恢复旧配置。"
+        warning "新配置未能启动，正在恢复旧配置..."
         if restore_config_backup; then
             restart_xray || true
-            error "已恢复旧配置。"
+            error "新配置启动失败，已恢复旧配置。"
         else
             error "旧配置恢复失败，请手动检查 ${xray_config_path}.bak。"
         fi
@@ -769,25 +778,32 @@ press_any_key_to_continue() {
     read -n 1 -s -r -p "按任意键返回主菜单..." || true
 }
 
+draw_divider() {
+    printf "%0.s─" {1..48}
+    printf "\n"
+}
+
 main_menu() {
     while true; do
         clear 2>/dev/null || true
-        printf '%b\n' "$cyan Xray VLESS-Reality 一键安装管理脚本 $SCRIPT_VERSION$none"
-        echo "---------------------------------------------"
+        printf '%b\n' "${cyan} Xray VLESS-Reality 管理脚本${none}"
+        printf '%b\n' "${yellow} Version: ${SCRIPT_VERSION}${none}"
+        draw_divider
         check_xray_status
         printf '%b\n' "$xray_status_info"
-        echo "---------------------------------------------"
+        draw_divider
         # 修改：明确菜单项 1
         printf "  ${green}%-2s${none} %-35s\n" "1." "安装/重装 Xray (VLESS-reality)"
         printf "  ${cyan}%-2s${none} %-35s\n" "2." "更新 Xray"
         printf "  ${yellow}%-2s${none} %-35s\n" "3." "重启 Xray"
         printf "  ${red}%-2s${none} %-35s\n" "4." "卸载 Xray"
+        draw_divider
         printf "  ${magenta}%-2s${none} %-35s\n" "5." "查看 Xray 日志"
         printf "  ${cyan}%-2s${none} %-35s\n" "6." "修改节点配置"
         printf "  ${green}%-2s${none} %-35s\n" "7." "查看订阅信息"
-        echo "---------------------------------------------"
+        draw_divider
         printf "  ${yellow}%-2s${none} %-35s\n" "0." "退出脚本"
-        echo "---------------------------------------------"
+        draw_divider
         if ! read -r -p "请输入选项 [0-7]: " choice; then
             info "检测到输入结束，退出脚本。"
             exit 0
