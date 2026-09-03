@@ -1,13 +1,15 @@
 #!/bin/bash
 
-# Xray VLESS-Reality 一键安装管理脚本
-# 版本: v26.09.03
+# ==============================================================================
+# Xray VLESS-Reality 极简一键安装脚本
+# 系统支持: Debian 10+ / Ubuntu 20.04+
+# 版本: v26.09.04
+# ==============================================================================
 
-# --- Shell 严格模式 ---
 set -euo pipefail
 
-# --- 全局常量 ---
-readonly SCRIPT_VERSION="v26.09.03"
+# --- 全局常量定义 ---
+readonly SCRIPT_VERSION="v26.09.04"
 readonly xray_config_path="/usr/local/etc/xray/config.json"
 readonly xray_binary_path="/usr/local/bin/xray"
 readonly xray_install_script_url="https://raw.githubusercontent.com/XTLS/Xray-install/e741a4f56d368afbb9e5be3361b40c4552d3710d/install-release.sh"
@@ -39,19 +41,6 @@ error() {
 info() { printf '\n%b[!] %s%b\n' "$yellow" "$1" "$none"; }
 success() { printf '\n%b[✔] %s%b\n' "$green" "$1" "$none"; }
 warning() { printf '\n%b[⚠] %s%b\n' "$yellow" "$1" "$none"; }
-
-spinner() {
-    local pid=$1; local spinstr='|/-\'
-
-    while ps -p "$pid" > /dev/null; do
-        local temp=${spinstr#?}
-        printf " [%c]  " "$spinstr"
-        spinstr=$temp${spinstr%"$temp"}
-        sleep 0.1
-        printf "\r"
-    done
-    printf "    \r"
-}
 
 is_valid_ipv4() {
     local ip="$1" part
@@ -87,7 +76,7 @@ get_public_ip() {
 }
 
 execute_official_script() {
-    local script_file log_file pid result=0
+    local script_file log_file result=0
     script_file=$(mktemp)
     log_file=$(mktemp)
     trap 'rm -f -- "${script_file:-}" "${log_file:-}"' RETURN
@@ -100,10 +89,7 @@ execute_official_script() {
         error "下载的 Xray 官方安装脚本校验失败，已拒绝执行。"
         return 1
     fi
-    bash "$script_file" "$@" >"$log_file" 2>&1 &
-    pid=$!
-    spinner "$pid"
-    wait "$pid" || result=$?
+    bash "$script_file" "$@" >"$log_file" 2>&1 || result=$?
     if (( result != 0 )); then
         error "Xray 官方安装脚本执行失败。"
         sed -n '1,30p' "$log_file" >&2 || true
@@ -329,10 +315,7 @@ pre_check() {
         info "检测到缺失的依赖 (jq/curl)，正在尝试自动安装..."
         local apt_log
         apt_log=$(mktemp)
-        (DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 update && DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y jq curl) >"$apt_log" 2>&1 &
-        local apt_pid=$!
-        spinner "$apt_pid"
-        wait "$apt_pid" || true
+        (DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 update && DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y jq curl) >"$apt_log" 2>&1 || true
         if ! command -v jq &>/dev/null || ! command -v curl &>/dev/null; then
             error "依赖 (jq/curl) 自动安装失败。请手动运行 'apt update && apt install -y jq curl' 后重试。"
             sed -n '1,20p' "$apt_log" >&2 || true
@@ -827,14 +810,54 @@ main_menu() {
     done
 }
 
+show_help() {
+    cat << EOF
+
+用法:
+  $0 [选项]
+  $0 install [参数...]
+
+无交互安装选项:
+  --port <端口>    VLESS 端口 (默认: 443)
+  --uuid <UUID>    用户 UUID (默认: 自动随机生成)
+  --sni <域名>     SNI 伪装域名 (默认: www.sega.com)
+  -h, --help       显示此帮助信息
+
+示例:
+  # 交互式管理菜单
+  $0
+
+  # 无交互一键安装
+  $0 install --port 443 --sni www.sega.com
+EOF
+}
+
 # --- 脚本主入口 ---
 main() {
+    if [[ $# -gt 0 && ( "$1" == "-h" || "$1" == "--help" ) ]]; then
+        if [[ $# -ne 1 ]]; then
+            error "选项 $1 不接受多余参数"
+            show_help
+            exit 2
+        fi
+        show_help
+        exit 0
+    fi
+
     pre_check
     if [[ $# -gt 0 && "$1" == "install" ]]; then
         shift
         local port="" uuid="" domain=""
         while [[ $# -gt 0 ]]; do
             case "$1" in
+                -h|--help)
+                    if [[ $# -ne 1 ]]; then
+                        error "选项 $1 不接受多余参数"
+                        show_help
+                        exit 2
+                    fi
+                    show_help
+                    exit 0 ;;
                 --port|--uuid|--sni)
                     [[ $# -ge 2 && -n "$2" && "$2" != -* ]] || {
                         error "参数 $1 缺少有效值。"
@@ -846,7 +869,7 @@ main() {
                         --sni) domain="$2" ;;
                     esac
                     shift 2 ;;
-                *) error "未知参数: $1"; exit 1 ;;
+                *) error "未知参数: $1"; show_help; exit 2 ;;
             esac
         done
         [[ -z "$port" ]] && port=$default_port
@@ -863,6 +886,10 @@ main() {
         fi
         run_install "$port" "$uuid" "$domain"
     else
+        if [[ ! -t 0 ]]; then
+            error "交互式菜单需要终端。非交互安装用法: $0 install [--port <端口>] [--uuid <UUID>] [--sni <域名>]"
+            exit 1
+        fi
         main_menu
     fi
 }
