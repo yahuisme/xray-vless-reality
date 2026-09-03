@@ -1,13 +1,13 @@
 #!/bin/bash
 
 # Xray VLESS-Reality 一键安装管理脚本
-# 版本: v26.09.02
+# 版本: v26.09.03
 
 # --- Shell 严格模式 ---
 set -euo pipefail
 
 # --- 全局常量 ---
-readonly SCRIPT_VERSION="v26.09.02"
+readonly SCRIPT_VERSION="v26.09.03"
 readonly xray_config_path="/usr/local/etc/xray/config.json"
 readonly xray_binary_path="/usr/local/bin/xray"
 readonly xray_install_script_url="https://raw.githubusercontent.com/XTLS/Xray-install/e741a4f56d368afbb9e5be3361b40c4552d3710d/install-release.sh"
@@ -638,7 +638,7 @@ view_subscription_info() {
     umask 077
     printf '%s\n' "$vless_url" > "$link_file"
     chmod 600 "$link_file"
-    echo "----------------------------------------------------------------"
+    draw_divider
     printf '%b\n' "$green --- Xray VLESS-Reality 订阅信息 --- $none"
     printf '%b\n' "$yellow 名称: $cyan$link_name$none"
     printf '%b\n' "$yellow 地址: $cyan$ip$none"
@@ -649,9 +649,9 @@ view_subscription_info() {
     printf '%b\n' "$yellow SNI: $cyan$domain$none"
     printf '%b\n' "$yellow 公钥: $cyan$public_key$none"
     printf '%b\n' "$yellow ShortId: $cyan$shortid$none"
-        echo "----------------------------------------------------------------"
+    draw_divider
     printf '%b\n\n%b\n' "$green 订阅链接 (已保存到 $link_file): $none" "$cyan${vless_url}${none}"
-        echo "----------------------------------------------------------------"
+    draw_divider
 }
 
 # --- 核心逻辑函数 ---
@@ -779,8 +779,7 @@ press_any_key_to_continue() {
 }
 
 draw_divider() {
-    printf "%0.s─" {1..48}
-    printf "\n"
+    printf '%s\n' "────────────────────────────────────"
 }
 
 main_menu() {
