@@ -328,13 +328,13 @@ pre_check() {
 }
 
 check_xray_status() {
-    if [[ ! -f "$xray_binary_path" ]]; then xray_status_info="  Xray 状态: ${red}未安装${none}"; return; fi
+    if [[ ! -f "$xray_binary_path" ]]; then xray_status_info=" Xray 状态: ${red}未安装${none}"; return; fi
     local xray_version
     xray_version=$(get_xray_version)
     [[ -n "$xray_version" ]] || xray_version="未知"
     local service_status
     if systemctl is-active --quiet xray 2>/dev/null; then service_status="${green}运行中${none}"; else service_status="${yellow}未运行${none}"; fi
-    xray_status_info="  Xray 状态: ${green}已安装${none} | ${service_status} | 版本: ${cyan}${xray_version}${none}"
+    xray_status_info=" Xray 状态: ${green}已安装${none} | ${service_status} | 版本: ${cyan}${xray_version}${none}"
 }
 
 # --- 交互输入助手（current 非空 = 修改已有配置，同名端口豁免占用检查） ---
