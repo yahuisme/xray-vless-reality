@@ -3,13 +3,13 @@
 # ==============================================================================
 # Xray VLESS-Reality 极简一键安装脚本
 # 系统支持: Debian 10+ / Ubuntu 20.04+
-# 版本: v26.09.04
+# 版本: v26.09.10
 # ==============================================================================
 
 set -euo pipefail
 
 # --- 全局常量定义 ---
-readonly SCRIPT_VERSION="v26.09.04"
+readonly SCRIPT_VERSION="v26.09.10"
 readonly xray_config_path="/usr/local/etc/xray/config.json"
 readonly xray_binary_path="/usr/local/bin/xray"
 readonly xray_install_script_url="https://raw.githubusercontent.com/XTLS/Xray-install/e741a4f56d368afbb9e5be3361b40c4552d3710d/install-release.sh"
@@ -29,18 +29,35 @@ readonly link_file="/root/xray_vless_reality_link.txt"
 
 
 # --- 辅助函数 ---
+# printf 风格包装器：调用方提供格式串和参数。
+# shellcheck disable=SC2059
+color_printf() {
+    if [[ -t 1 && ! ${NO_COLOR+x} && ${TERM:-dumb} != dumb ]]; then
+        printf "$@"
+    else
+        local text
+        printf -v text "$@"
+        # 逐个移除本脚本的 SGR，保留普通文本和换行。
+        local code
+        for code in "$red" "$green" "$yellow" "$magenta" "$cyan" "$none"; do
+            text=${text//"$code"/}
+        done
+        printf '%s' "$text"
+    fi
+}
+
 error() {
-    printf '\n%b[✖] %s%b\n\n' "$red" "$1" "$none" >&2
+    color_printf '\n%b[✖] %s%b\n\n' "$red" "$1" "$none" >&2
     # xray-dual 同款：根据错误内容给出简单建议
     case "$1" in
-        *"网络"*|*"下载"*) printf '%b\n' "$yellow提示: 检查网络连接或更换DNS$none" >&2 ;;
-        *"权限"*|*"root"*) printf '%b\n' "$yellow提示: 请使用 sudo 运行脚本$none" >&2 ;;
-        *"端口"*) printf '%b\n' "$yellow提示: 尝试使用其他端口号$none" >&2 ;;
+        *"网络"*|*"下载"*) color_printf '%b\n' "$yellow提示: 检查网络连接或更换DNS$none" >&2 ;;
+        *"权限"*|*"root"*) color_printf '%b\n' "$yellow提示: 请使用 sudo 运行脚本$none" >&2 ;;
+        *"端口"*) color_printf '%b\n' "$yellow提示: 尝试使用其他端口号$none" >&2 ;;
     esac
 }
-info() { printf '\n%b[!] %s%b\n' "$yellow" "$1" "$none"; }
-success() { printf '\n%b[✔] %s%b\n' "$green" "$1" "$none"; }
-warning() { printf '\n%b[⚠] %s%b\n' "$yellow" "$1" "$none"; }
+info() { color_printf '\n%b[!] %s%b\n' "$yellow" "$1" "$none"; }
+success() { color_printf '\n%b[✔] %s%b\n' "$green" "$1" "$none"; }
+warning() { color_printf '\n%b[⚠] %s%b\n' "$yellow" "$1" "$none"; }
 
 is_valid_ipv4() {
     local ip="$1" part
@@ -51,12 +68,39 @@ is_valid_ipv4() {
     done
 }
 
+is_valid_ipv6() {
+    local ip=$1 tail part count=0 compressed=false
+    [[ $ip == *:* && $ip != *:::* && $ip != *[^0-9a-fA-F:.]* ]] || return 1
+    [[ $ip != :* || $ip == ::* ]] && [[ $ip != *: || $ip == *:: ]] || return 1
+    if [[ $ip == *.* ]]; then
+        tail=${ip##*:}
+        is_valid_ipv4 "$tail" || return 1
+        ip=${ip%:*}:0:0
+    fi
+    if [[ $ip == *::* ]]; then
+        compressed=true
+        tail=${ip#*::}
+        [[ $tail != *::* ]] || return 1
+        ip=${ip/::/:}
+        ip=${ip#:}; ip=${ip%:}
+    else
+        [[ $ip != :* && $ip != *: ]] || return 1
+    fi
+    local -a parts=()
+    IFS=: read -ra parts <<< "$ip"
+    for part in "${parts[@]}"; do
+        [[ $part =~ ^[0-9a-fA-F]{1,4}$ ]] || return 1
+        count=$((count + 1))
+    done
+    if [[ $compressed == true ]]; then ((count < 8)); else ((count == 8)); fi
+}
+
 get_public_ip() {
     local ip url cache_file="/usr/local/etc/xray/.public-ip"
     # 缓存 1 天，避免每次查看配置都发起网络请求；公网 IP 变更后自动刷新
     if [[ -f "$cache_file" && -z "$(find "$cache_file" -mmin +1440 2>/dev/null)" ]]; then
         ip=$(<"$cache_file")
-        [[ -n "$ip" ]] && { printf '%s\n' "$ip"; return; }
+        { is_valid_ipv4 "$ip" || is_valid_ipv6 "$ip"; } && { printf '%s\n' "$ip"; return; }
     fi
     for url in https://api.ipify.org https://ip.sb https://checkip.amazonaws.com; do
         if ip=$(curl --fail --silent --show-error --ipv4 --max-time 5 "$url" 2>/dev/null | tr -d '[:space:]') && is_valid_ipv4 "$ip"; then
@@ -66,7 +110,7 @@ get_public_ip() {
         fi
     done
     for url in https://api64.ipify.org https://ip.sb; do
-        if ip=$(curl --fail --silent --show-error --ipv6 --max-time 5 "$url" 2>/dev/null | tr -d '[:space:]') && [[ "$ip" =~ ^[0-9A-Fa-f:]+$ && "$ip" == *:* ]]; then
+        if ip=$(curl --fail --silent --show-error --ipv6 --max-time 5 "$url" 2>/dev/null | tr -d '[:space:]') && is_valid_ipv6 "$ip"; then
             printf '%s\n' "$ip" > "$cache_file" 2>/dev/null || true
             printf '%s\n' "$ip"
             return
@@ -77,8 +121,8 @@ get_public_ip() {
 
 execute_official_script() {
     local script_file log_file result=0
-    script_file=$(mktemp)
-    log_file=$(mktemp)
+    script_file=$(mktemp) || return 1
+    log_file=$(mktemp) || return 1
     trap 'rm -f -- "${script_file:-}" "${log_file:-}"' RETURN
     if ! curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
         --connect-timeout 10 --max-time 120 "$xray_install_script_url" > "$script_file"; then
@@ -89,6 +133,14 @@ execute_official_script() {
         error "下载的 Xray 官方安装脚本校验失败，已拒绝执行。"
         return 1
     fi
+    # 摘要校验后，仅改写固定源码末尾的停止状态判断；其他 return/exit 原样保留。
+    local source_text stopped_tail
+    source_text=$(<"$script_file")
+    stopped_tail=$'    [[ "$XRAY_RUNNING" -eq \'1\' ]] && start_xray\n  else\n'
+    if [[ $source_text != *"$stopped_tail"* || ${source_text#*"$stopped_tail"} == *"$stopped_tail"* ]]; then
+        error "官方安装脚本末尾语义不匹配，已拒绝执行。"; return 1
+    fi
+    printf '%s\n' "${source_text/"$stopped_tail"/$'    if [[ "$XRAY_RUNNING" -eq \'1\' ]]; then start_xray; fi\n  else\n'}" > "$script_file" || return 1
     bash "$script_file" "$@" >"$log_file" 2>&1 || result=$?
     if (( result != 0 )); then
         error "Xray 官方安装脚本执行失败。"
@@ -103,7 +155,7 @@ execute_official_script() {
 is_valid_port() {
     local port=$1
     # 拒绝前导零（如 0443），避免 jq --argjson 静默改写成 443
-    [[ "$port" =~ ^([1-9][0-9]*|0)$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]
+    [[ "$port" =~ ^[1-9][0-9]{0,4}$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]
 }
 
 # 新增：检查端口是否被占用
@@ -159,10 +211,7 @@ restore_config_backup() {
     jq empty "$backup" >/dev/null 2>&1 || return 1
     cp -p "$backup" "$xray_config_path" || return 1
     apply_config_permissions || return 1
-    # 文件已恢复即视为成功；校验失败只警告，让上层继续尝试重启并向用户报告
-    "$xray_binary_path" run -test -config "$xray_config_path" >/dev/null 2>&1 \
-        || info "已恢复的配置文件未通过 Xray 校验，请检查 $backup。"
-    return 0
+    "$xray_binary_path" run -test -config "$xray_config_path" >/dev/null 2>&1
 }
 
 apply_config_permissions() {
@@ -171,37 +220,53 @@ apply_config_permissions() {
     [[ -n "$service_user" && "$service_user" != "-" ]] || service_user=root
     service_group=$(id -g -n "$service_user" 2>/dev/null || true)
     if [[ "$service_user" != root && -n "$service_group" ]] && getent group "$service_group" >/dev/null; then
-        chown "root:$service_group" "$config_file"
+        chown "root:$service_group" "$config_file" || return 1
         chmod 640 "$config_file"
     else
-        chown root:root "$config_file"
+        chown root:root "$config_file" || return 1
         chmod 600 "$config_file"
     fi
 }
 
-restore_binary_backup() {
-    if [[ -f "$xray_binary_backup_path" ]]; then
-        cp -p "$xray_binary_backup_path" "$xray_binary_path"
-        return 0
-    fi
-    return 1
+# 每次操作独立快照；恢复失败时保留目录，绝不借用旧 .bak。
+backup_state() {
+    backup_dir=$(mktemp -d "${TMPDIR:-/tmp}/xray-recovery.XXXXXX") || return 1
+    was_active=false
+    systemctl is-active --quiet xray && was_active=true
+    local i
+    for i in "${!backup_paths[@]}"; do
+        if [[ -e ${backup_paths[i]} || -L ${backup_paths[i]} ]]; then
+            cp -a -- "${backup_paths[i]}" "$backup_dir/$i" || {
+                error "备份失败，已停止操作：$backup_dir"; return 1;
+            }
+        fi
+    done
 }
 
-restore_or_remove_binary() {
-    local had_binary=$1
-    if [[ "$had_binary" == true ]]; then
-        restore_binary_backup
-    else
-        rm -f "$xray_binary_path"
-    fi
+restore_state() {
+    [[ -d ${backup_dir:-} ]] || return 1
+    systemctl stop xray || return 1
+    local i target
+    for i in "${!backup_paths[@]}"; do
+        target=${backup_paths[i]}
+        if [[ -e $backup_dir/$i || -L $backup_dir/$i ]]; then
+            rm -rf -- "$target" && cp -a -- "$backup_dir/$i" "$target" || return 1
+        else
+            rm -rf -- "$target" || return 1
+        fi
+    done
+    systemctl daemon-reload || return 1
+    if [[ $was_active == true ]]; then restart_xray || return 1; fi
 }
 
-# 安装失败回滚：恢复/删除二进制，撤销全新安装时官方脚本 enable 的服务，尽量恢复服务状态
 rollback_binary_and_service() {
-    local had_binary=$1
-    restore_or_remove_binary "$had_binary" || true
-    [[ "$had_binary" == false ]] && disable_xray_service || true
-    [[ -x "$xray_binary_path" ]] && restart_xray || true
+    if restore_state; then
+        info "已恢复操作前的文件与运行状态。"
+        rm -rf -- "$backup_dir" || return 1
+    else
+        error "恢复失败，请保留并检查：${backup_dir:-未创建备份}"
+        return 1
+    fi
 }
 
 get_xray_version() {
@@ -222,7 +287,7 @@ validate_vless_config() {
         ((.inbounds[0].streamSettings.realitySettings.serverNames[0] // empty) | type == "string" and length > 0) and
         (.inbounds[0].streamSettings.security == "reality") and
         ((.inbounds[0].streamSettings.realitySettings.privateKey // empty) | type == "string" and length > 0) and
-        ((.inbounds[0].streamSettings.realitySettings.publicKey // empty) | type == "string" and length > 0) and
+        (.inbounds[0].streamSettings.realitySettings.publicKey as $key | $key == null or ($key | type == "string" and test("^[A-Za-z0-9_-]{43}$"))) and
         ((.inbounds[0].streamSettings.realitySettings.shortIds[0] // empty) | type == "string" and length > 0)) // false)
     ' "$config_file" >/dev/null 2>&1
 }
@@ -334,7 +399,7 @@ check_xray_status() {
     [[ -n "$xray_version" ]] || xray_version="未知"
     local service_status
     if systemctl is-active --quiet xray 2>/dev/null; then service_status="${green}运行中${none}"; else service_status="${yellow}未运行${none}"; fi
-    xray_status_info=" Xray 状态: ${green}已安装${none} | ${service_status} | 版本: ${cyan}${xray_version}${none}"
+    xray_status_info=" Xray: ${service_status} | ${cyan}${xray_version}${none}"
 }
 
 # --- 交互输入助手（current 非空 = 修改已有配置，同名端口豁免占用检查） ---
@@ -342,10 +407,10 @@ ask_port() {
     local current=${1:-} port
     while true; do
         if [[ -n "$current" ]]; then
-            read -r -p " -> 新端口 (当前: ${cyan}${current}${none}, 回车保留): " port
+            read -r -p "端口 (回车保留): " port || return 1
             [ -z "$port" ] && port=$current
         else
-            read -r -p " -> 请输入端口 [1-65535] (默认: ${cyan}${default_port}${none}): " port
+            read -r -p "端口 [${default_port}]: " port || return 1
             [ -z "$port" ] && port=$default_port
         fi
         if ! is_valid_port "$port"; then
@@ -365,10 +430,10 @@ ask_uuid() {
     local current=${1:-} uuid
     while true; do
         if [[ -n "$current" ]]; then
-            read -r -p " -> 新UUID (当前: ${cyan}${current}${none}, 回车保留): " uuid
+            read -r -p "UUID (回车保留): " uuid || return 1
             [ -z "$uuid" ] && uuid=$current
         else
-            read -r -p " -> 请输入UUID (留空将自动生成): " uuid
+            read -r -p "UUID (回车生成): " uuid || return 1
             if [[ -z "$uuid" ]]; then
                 uuid=$(generate_uuid)
                 info "已为您生成随机UUID: ${cyan}${uuid}${none}" >&2
@@ -388,21 +453,15 @@ ask_domain() {
     local current=${1:-} domain
     while true; do
         if [[ -n "$current" ]]; then
-            read -r -p " -> 新SNI域名 (当前: ${cyan}${current}${none}, 回车保留): " domain
+            read -r -p "SNI (回车保留): " domain || return 1
             [ -z "$domain" ] && domain=$current
         else
-            read -r -p " -> 请输入SNI域名 (默认: ${cyan}${default_sni}${none}): " domain
+            read -r -p "SNI [${default_sni}]: " domain || return 1
             [ -z "$domain" ] && domain=$default_sni
         fi
         if is_valid_domain "$domain"; then break; else error "域名格式无效，请重新输入。"; fi
     done
     printf '%s' "$domain"
-}
-
-# 全新安装失败时，撤销官方脚本已 enable 的 xray 服务，恢复"未安装"状态
-disable_xray_service() {
-    systemctl disable --now xray 2>/dev/null || true
-    systemctl daemon-reload 2>/dev/null || true
 }
 
 # --- 菜单功能函数 ---
@@ -419,20 +478,16 @@ install_xray() {
     local current_port="" port uuid domain
     # 重装场景：读取现有配置端口，同端口重装时豁免占用检查
     [[ -f "$xray_config_path" ]] && current_port=$(jq -r '.inbounds[0].port // empty' "$xray_config_path" 2>/dev/null || true)
-    port=$(ask_port "$current_port")
-    uuid=$(ask_uuid)
-    domain=$(ask_domain)
+    port=$(ask_port "$current_port") || return 1
+    uuid=$(ask_uuid) || return 1
+    domain=$(ask_domain) || return 1
 
     run_install "$port" "$uuid" "$domain"
 }
 
-# 更新失败统一回滚：恢复旧核心并尽量重启服务
 update_failed() {
     error "$1"
-    if restore_or_remove_binary true; then
-        restart_xray || true
-        error "已恢复更新前的 Xray 核心。"
-    fi
+    rollback_binary_and_service || return 1
     return 1
 }
 
@@ -458,11 +513,11 @@ update_xray() {
     if [[ "$current_version" == "$latest_version" ]]; then success "您的 Xray 已是最新版本，无需更新。" && return; fi
     
     info "发现新版本，开始更新..."
-    if ! cp -p "$xray_binary_path" "$xray_binary_backup_path"; then
-        error "无法备份当前 Xray 核心，已停止更新。"
-        return 1
-    fi
-    if ! execute_official_script "install" "--without-geodata"; then
+    local backup_dir was_active
+    local -a backup_paths=("$xray_binary_path" /usr/local/share/xray/geoip.dat /usr/local/share/xray/geosite.dat)
+    [[ -f /etc/systemd/system/xray.service ]] || { error "缺少 Xray 服务文件，请先修复安装。"; return 1; }
+    backup_state || return 1
+    if ! execute_official_script "install" "--without-geodata" "--no-update-service"; then
         update_failed "Xray 核心更新失败！"
         return
     fi
@@ -476,11 +531,12 @@ update_xray() {
         return
     fi
 
-    if ! restart_xray; then
+    if { [[ $was_active == true ]] && ! restart_xray; } ||
+       { [[ $was_active == false ]] && ! systemctl stop xray; }; then
         update_failed "更新后的 Xray 启动失败。"
         return
     fi
-    rm -f "$xray_binary_backup_path"
+    rm -rf -- "$backup_dir" || return 1
     success "Xray 更新成功！"
 }
 
@@ -536,8 +592,8 @@ uninstall_xray() {
         /etc/systemd/system/xray.service \
         /etc/systemd/system/xray@.service \
         /etc/systemd/system/xray.service.d \
-        /etc/systemd/system/xray@.service.d
-    systemctl daemon-reload 2>/dev/null || true
+        /etc/systemd/system/xray@.service.d || { error "残留文件清理失败。"; return 1; }
+    systemctl daemon-reload || return 1
     success "Xray 已成功卸载，相关配置、备份、日志和临时文件已清理。"
 }
 
@@ -563,18 +619,17 @@ modify_config() {
 
     info "请输入新配置，直接回车则保留当前值。"
     local port uuid domain
-    port=$(ask_port "$current_port")
-    uuid=$(ask_uuid "$current_uuid")
-    domain=$(ask_domain "$current_domain")
+    port=$(ask_port "$current_port") || return 1
+    uuid=$(ask_uuid "$current_uuid") || return 1
+    domain=$(ask_domain "$current_domain") || return 1
 
-    if ! write_config "$port" "$uuid" "$domain" "$private_key" "$public_key"; then
+    if ! write_config "$port" "$uuid" "$domain" "$private_key" "$public_key" modify; then
         error "配置写入失败，未重启 Xray。"
         return 1
     fi
     if ! restart_xray; then
         warning "新配置未能启动，正在恢复旧配置..."
-        if restore_config_backup; then
-            restart_xray || true
+        if restore_config_backup && restart_xray; then
             error "新配置启动失败，已恢复旧配置。"
         else
             error "旧配置恢复失败，请手动检查 ${xray_config_path}.bak。"
@@ -599,7 +654,11 @@ view_subscription_info() {
     uuid=$(jq -r '.inbounds[0].settings.clients[0].id // empty' "$xray_config_path")
     port=$(jq -r '.inbounds[0].port // empty' "$xray_config_path")
     domain=$(jq -r '.inbounds[0].streamSettings.realitySettings.serverNames[0] // empty' "$xray_config_path")
-    public_key=$(jq -r '.inbounds[0].streamSettings.realitySettings.publicKey // empty' "$xray_config_path")
+    local private_key key_pair
+    private_key=$(jq -er '.inbounds[0].streamSettings.realitySettings.privateKey' "$xray_config_path") || return 1
+    key_pair=$("$xray_binary_path" x25519 -i "$private_key") || { error "无法从现有私钥派生公钥。"; return 1; }
+    public_key=$(awk '/^(PublicKey|Public key|Password( \(PublicKey\))?):/ {print $NF}' <<< "$key_pair")
+    [[ $public_key =~ ^[A-Za-z0-9_-]{43}$ ]] || { error "派生公钥无效。"; return 1; }
     shortid=$(jq -r '.inbounds[0].streamSettings.realitySettings.shortIds[0] // empty' "$xray_config_path")
     if [[ -z "$public_key" || -z "$shortid" ]]; then
         error "配置文件中缺少公钥或 ShortId 信息，可能是旧版配置，请重新安装以修复。"
@@ -607,6 +666,7 @@ view_subscription_info() {
     fi
 
     local display_ip="$ip"
+    is_valid_ipv4 "$ip" || is_valid_ipv6 "$ip" || { error "公网 IP 无效。"; return 1; }
     [[ "$ip" == *:* ]] && display_ip="[$ip]"
     local link_name
     link_name="$(hostname) X-reality"
@@ -619,21 +679,27 @@ view_subscription_info() {
     local vless_url="vless://${uuid}@${display_ip}:${port}?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&sni=${domain_encoded}&fp=chrome&pbk=${public_key_encoded}&sid=${shortid_encoded}#${link_name_encoded}"
 
     umask 077
-    printf '%s\n' "$vless_url" > "$link_file"
-    chmod 600 "$link_file"
+    local tmp_link
+    tmp_link=$(mktemp "${link_file}.tmp.XXXXXX") || return 1
+    if ! printf '%s\n' "$vless_url" > "$tmp_link" ||
+       ! chmod 600 "$tmp_link" || ! mv -fT "$tmp_link" "$link_file"; then
+        rm -f -- "$tmp_link"
+        error "节点链接保存失败。"
+        return 1
+    fi
     draw_divider
-    printf '%b\n' "$green --- Xray VLESS-Reality 订阅信息 --- $none"
-    printf '%b\n' "$yellow 名称: $cyan$link_name$none"
-    printf '%b\n' "$yellow 地址: $cyan$ip$none"
-    printf '%b\n' "$yellow 端口: $cyan$port$none"
-    printf '%b\n' "$yellow UUID: $cyan$uuid$none"
-    printf '%b\n' "$yellow 流控: $cyan xtls-rprx-vision$none"
-    printf '%b\n' "$yellow 指纹: $cyan chrome$none"
-    printf '%b\n' "$yellow SNI: $cyan$domain$none"
-    printf '%b\n' "$yellow 公钥: $cyan$public_key$none"
-    printf '%b\n' "$yellow ShortId: $cyan$shortid$none"
+    color_printf '%b\n' "$green --- VLESS-Reality 节点链接 --- $none"
+    color_printf '%b\n' "$yellow 名称: $cyan$link_name$none"
+    color_printf '%b\n' "$yellow 地址: $cyan$ip$none"
+    color_printf '%b\n' "$yellow 端口: $cyan$port$none"
+    color_printf '%b\n' "$yellow UUID: $cyan$uuid$none"
+    color_printf '%b\n' "$yellow 流控: $cyan xtls-rprx-vision$none"
+    color_printf '%b\n' "$yellow 指纹: $cyan chrome$none"
+    color_printf '%b\n' "$yellow SNI: $cyan$domain$none"
+    color_printf '%b\n' "$yellow 公钥: $cyan$public_key$none"
+    color_printf '%b\n' "$yellow ShortId: $cyan$shortid$none"
     draw_divider
-    printf '%b\n\n%b\n' "$green 订阅链接 (已保存到 $link_file): $none" "$cyan${vless_url}${none}"
+    color_printf '%b\n\n%b\n' "$green 订阅链接 (已保存到 $link_file): $none" "$cyan${vless_url}${none}"
     draw_divider
 }
 
@@ -641,6 +707,15 @@ view_subscription_info() {
 write_config() {
     local port=$1 uuid=$2 domain=$3 private_key=$4 public_key=$5 shortid=$default_shortid
     local config_content test_log
+    if [[ ${6:-} == modify ]]; then
+        config_content=$(jq --argjson port "$port" --arg uuid "$uuid" --arg domain "$domain" '
+            .inbounds[0].port=$port |
+            .inbounds[0].settings.clients[0].id=$uuid |
+            if .inbounds[0].streamSettings.realitySettings.serverNames[0] != $domain then
+                .inbounds[0].streamSettings.realitySettings.serverNames[0]=$domain |
+                .inbounds[0].streamSettings.realitySettings.dest=($domain+":443")
+            else . end' "$xray_config_path") || return 1
+    else
     config_content=$(jq -n \
         --argjson port "$port" \
         --arg uuid "$uuid" \
@@ -648,18 +723,19 @@ write_config() {
         --arg private_key "$private_key" \
         --arg public_key "$public_key" \
         --arg shortid "$shortid" \
-    '{"log":{"loglevel":"warning"},"inbounds":[{"listen":"0.0.0.0","port":$port,"protocol":"vless","settings":{"clients":[{"id":$uuid,"flow":"xtls-rprx-vision"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"show":false,"dest":($domain+":443"),"xver":0,"serverNames":[$domain],"privateKey":$private_key,"publicKey":$public_key,"shortIds":[$shortid]}},"sniffing":{"enabled":true,"destOverride":["http","tls","quic"]}}],"outbounds":[{"protocol":"freedom","settings":{"domainStrategy":"UseIPv4v6"}}]}')
-    if ! printf '%s\n' "$config_content" | jq empty >/dev/null 2>&1; then
+    '{"log":{"loglevel":"warning"},"inbounds":[{"listen":"0.0.0.0","port":$port,"protocol":"vless","settings":{"clients":[{"id":$uuid,"flow":"xtls-rprx-vision"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"show":false,"dest":($domain+":443"),"xver":0,"serverNames":[$domain],"privateKey":$private_key,"publicKey":$public_key,"shortIds":[$shortid]}},"sniffing":{"enabled":true,"destOverride":["http","tls","quic"]}}],"outbounds":[{"protocol":"freedom","settings":{"domainStrategy":"UseIPv4v6"}}]}') || return 1
+    fi
+    if ! printf '%s\n' "$config_content" | jq -e 'type == "object"' >/dev/null 2>&1; then
         error "生成的 Xray JSON 配置无效。"
         return 1
     fi
-    install -d -m 0755 "$(dirname "$xray_config_path")"
+    install -d -m 0755 "$(dirname "$xray_config_path")" || return 1
     local tmp_config
-    tmp_config=$(mktemp "${xray_config_path}.tmp.XXXXXX.json")
+    tmp_config=$(mktemp "${xray_config_path}.tmp.XXXXXX.json") || return 1
     trap 'rm -f -- "${tmp_config:-}"' RETURN
-    printf '%s\n' "$config_content" > "$tmp_config"
-    test_log=$(mktemp)
-    chmod 600 "$test_log"
+    printf '%s\n' "$config_content" > "$tmp_config" || return 1
+    test_log=$(mktemp) || return 1
+    chmod 600 "$test_log" || return 1
     if [[ -x "$xray_binary_path" ]] && ! "$xray_binary_path" run -test -config "$tmp_config" >"$test_log" 2>&1; then
         error "Xray 配置校验失败，未替换现有配置。"
         sed -n '1,40p' "$test_log" >&2 || true
@@ -683,75 +759,68 @@ write_config() {
         return 1
     fi
     trap - RETURN
-    apply_config_permissions
+    return 0
 }
 
 run_install() {
     local port=$1 uuid=$2 domain=$3
-    local had_config=false had_binary=false
-    [[ -f "$xray_config_path" ]] && had_config=true
-    [[ -f "$xray_binary_path" ]] && had_binary=true
+    local backup_dir was_active
+    local -a backup_paths=("$xray_binary_path" /usr/local/share/xray/geoip.dat /usr/local/share/xray/geosite.dat
+        "$xray_config_path" /etc/systemd/system/xray.service /etc/systemd/system/xray@.service
+        /etc/systemd/system/xray.service.d /etc/systemd/system/xray@.service.d
+        /etc/systemd/system/multi-user.target.wants/xray.service)
+    backup_state || return 1
     info "正在下载并安装 Xray 核心..."
-    if [[ -x "$xray_binary_path" ]]; then
-        if ! cp -p "$xray_binary_path" "$xray_binary_backup_path"; then
-            error "无法备份当前 Xray 核心，已终止安装。"
-            return 1
-        fi
-    fi
     # --without-geodata: 官方 install 默认已含 geodata 下载，与下方
     # install-geodata 重复；统一由 install-geodata 负责。
-    if ! execute_official_script "install" "--without-geodata"; then
+    if ! execute_official_script "install" "--without-geodata" "--no-update-service"; then
         error "Xray 核心安装失败！请检查网络连接。"
-        rollback_binary_and_service "$had_binary"
+        rollback_binary_and_service
         return 1
     fi
 
     info "正在安装/更新 GeoIP 和 GeoSite 数据文件..."
     if ! execute_official_script "install-geodata"; then
         error "GeoIP/GeoSite 数据安装失败，正在恢复旧版本。"
-        rollback_binary_and_service "$had_binary"
+        rollback_binary_and_service
         return 1
     fi
 
-    info "正在生成 Reality 密钥对..."
-    local key_pair
-    if ! key_pair=$($xray_binary_path x25519); then
+    info "正在准备 Reality 密钥对..."
+    local key_pair private_key public_key
+    local -a key_args=()
+    if [[ -f $backup_dir/3 ]]; then
+        private_key=$(jq -er '.inbounds[0].streamSettings.realitySettings.privateKey' "$backup_dir/3") || {
+            error "无法读取原私钥，已停止安装。"; rollback_binary_and_service; return 1;
+        }
+        key_args=(-i "$private_key")
+    fi
+    if ! key_pair=$("$xray_binary_path" x25519 "${key_args[@]}"); then
         error "生成 Reality 密钥对失败！"
-        rollback_binary_and_service "$had_binary"
+        rollback_binary_and_service
         return 1
     fi
-    local private_key public_key
     private_key=$(awk '/PrivateKey:/ {print $2}' <<< "$key_pair")
     public_key=$(awk '/^Password( \(PublicKey\))?:/ {print $NF}' <<< "$key_pair")
-    if [[ -z "$private_key" || -z "$public_key" ]]; then
+    if [[ ! $private_key =~ ^[A-Za-z0-9_-]{43}$ || ! $public_key =~ ^[A-Za-z0-9_-]{43}$ ]]; then
         error "生成 Reality 密钥对失败！请检查 Xray 核心是否正常。"
-        rollback_binary_and_service "$had_binary"
+        rollback_binary_and_service
         return 1
     fi
 
     info "正在写入 Xray 配置文件..."
     if ! write_config "$port" "$uuid" "$domain" "$private_key" "$public_key"; then
-        rollback_binary_and_service "$had_binary"
+        rollback_binary_and_service
         return 1
     fi
 
     if ! restart_xray; then
         error "Xray 启动失败，正在恢复旧配置和核心。"
-        if [[ "$had_config" == true ]]; then
-            if restore_config_backup; then
-                rollback_binary_and_service "$had_binary"
-                error "已恢复旧配置和核心。"
-            else
-                error "旧配置恢复失败，请手动检查 ${xray_config_path}.bak。"
-            fi
-        else
-            rm -f "$xray_config_path"
-            rollback_binary_and_service "$had_binary"
-        fi
+        rollback_binary_and_service
         return 1
     fi
 
-    rm -f "$xray_binary_backup_path"
+    rm -rf -- "$backup_dir" || return 1
     success "Xray 安装/配置成功！"
     view_subscription_info
 }
@@ -768,23 +837,23 @@ draw_divider() {
 main_menu() {
     while true; do
         clear 2>/dev/null || true
-        printf '%b\n' "${cyan} Xray VLESS-Reality 管理脚本${none}"
-        printf '%b\n' "${yellow} Version: ${SCRIPT_VERSION}${none}"
+        color_printf '%b\n' "${cyan} Xray VLESS-Reality 管理脚本${none}"
+        color_printf '%b\n' "${yellow} Version: ${SCRIPT_VERSION}${none}"
         draw_divider
         check_xray_status
-        printf '%b\n' "$xray_status_info"
+        color_printf '%b\n' "$xray_status_info"
         draw_divider
         # 修改：明确菜单项 1
-        printf "  ${green}%-2s${none} %-35s\n" "1." "安装/重装 Xray (VLESS-reality)"
-        printf "  ${cyan}%-2s${none} %-35s\n" "2." "更新 Xray"
-        printf "  ${yellow}%-2s${none} %-35s\n" "3." "重启 Xray"
-        printf "  ${red}%-2s${none} %-35s\n" "4." "卸载 Xray"
+        color_printf "  ${green}%-2s${none} %s\n" "1." "安装 / 重装 Xray"
+        color_printf "  ${cyan}%-2s${none} %s\n" "2." "更新 Xray"
+        color_printf "  ${yellow}%-2s${none} %s\n" "3." "重启 Xray"
+        color_printf "  ${red}%-2s${none} %s\n" "4." "卸载 Xray"
         draw_divider
-        printf "  ${magenta}%-2s${none} %-35s\n" "5." "查看 Xray 日志"
-        printf "  ${cyan}%-2s${none} %-35s\n" "6." "修改节点配置"
-        printf "  ${green}%-2s${none} %-35s\n" "7." "查看订阅信息"
+        color_printf "  ${magenta}%-2s${none} %s\n" "5." "查看 Xray 日志"
+        color_printf "  ${cyan}%-2s${none} %s\n" "6." "修改节点配置"
+        color_printf "  ${green}%-2s${none} %s\n" "7." "查看节点链接"
         draw_divider
-        printf "  ${yellow}%-2s${none} %-35s\n" "0." "退出脚本"
+        color_printf "  ${yellow}%-2s${none} %s\n" "0." "退出脚本"
         draw_divider
         if ! read -r -p "请输入选项 [0-7]: " choice; then
             info "检测到输入结束，退出脚本。"
@@ -844,7 +913,6 @@ main() {
         exit 0
     fi
 
-    pre_check
     if [[ $# -gt 0 && "$1" == "install" ]]; then
         shift
         local port="" uuid="" domain=""
@@ -872,6 +940,7 @@ main() {
                 *) error "未知参数: $1"; show_help; exit 2 ;;
             esac
         done
+        pre_check
         [[ -z "$port" ]] && port=$default_port
         [[ -z "$uuid" ]] && uuid=$(generate_uuid)
         [[ -z "$domain" ]] && domain=$default_sni
@@ -886,6 +955,8 @@ main() {
         fi
         run_install "$port" "$uuid" "$domain"
     else
+        if [[ $# -gt 0 ]]; then error "未知参数: $1"; return 2; fi
+        pre_check
         if [[ ! -t 0 ]]; then
             error "交互式菜单需要终端。非交互安装用法: $0 install [--port <端口>] [--uuid <UUID>] [--sni <域名>]"
             exit 1
