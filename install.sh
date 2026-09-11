@@ -3,13 +3,13 @@
 # ==============================================================================
 # Xray VLESS-Reality 极简一键安装脚本
 # 系统支持: Debian 10+ / Ubuntu 20.04+
-# 版本: v26.09.10
+# 版本: v26.09.11
 # ==============================================================================
 
 set -euo pipefail
 
 # --- 全局常量定义 ---
-readonly SCRIPT_VERSION="v26.09.10"
+readonly SCRIPT_VERSION="v26.09.11"
 readonly xray_config_path="/usr/local/etc/xray/config.json"
 readonly xray_binary_path="/usr/local/bin/xray"
 readonly xray_install_script_url="https://raw.githubusercontent.com/XTLS/Xray-install/e741a4f56d368afbb9e5be3361b40c4552d3710d/install-release.sh"
@@ -104,14 +104,14 @@ get_public_ip() {
     fi
     for url in https://api.ipify.org https://ip.sb https://checkip.amazonaws.com; do
         if ip=$(curl --fail --silent --show-error --ipv4 --max-time 5 "$url" 2>/dev/null | tr -d '[:space:]') && is_valid_ipv4 "$ip"; then
-            printf '%s\n' "$ip" > "$cache_file" 2>/dev/null || true
+            { [[ -d "${cache_file%/*}" ]] && printf '%s\n' "$ip" 2>/dev/null > "$cache_file"; } || true
             printf '%s\n' "$ip"
             return
         fi
     done
     for url in https://api64.ipify.org https://ip.sb; do
         if ip=$(curl --fail --silent --show-error --ipv6 --max-time 5 "$url" 2>/dev/null | tr -d '[:space:]') && is_valid_ipv6 "$ip"; then
-            printf '%s\n' "$ip" > "$cache_file" 2>/dev/null || true
+            { [[ -d "${cache_file%/*}" ]] && printf '%s\n' "$ip" 2>/dev/null > "$cache_file"; } || true
             printf '%s\n' "$ip"
             return
         fi
@@ -399,7 +399,7 @@ check_xray_status() {
     [[ -n "$xray_version" ]] || xray_version="未知"
     local service_status
     if systemctl is-active --quiet xray 2>/dev/null; then service_status="${green}运行中${none}"; else service_status="${yellow}未运行${none}"; fi
-    xray_status_info=" Xray: ${service_status} | ${cyan}${xray_version}${none}"
+    xray_status_info=" Xray: ${service_status} | 版本: ${cyan}${xray_version}${none}"
 }
 
 # --- 交互输入助手（current 非空 = 修改已有配置，同名端口豁免占用检查） ---
@@ -407,10 +407,10 @@ ask_port() {
     local current=${1:-} port
     while true; do
         if [[ -n "$current" ]]; then
-            read -r -p "端口 (回车保留): " port || return 1
+            read -r -p "端口 [1-65535] (当前: ${current}, 回车保留): " port || return 1
             [ -z "$port" ] && port=$current
         else
-            read -r -p "端口 [${default_port}]: " port || return 1
+            read -r -p "端口 [1-65535] (默认: ${default_port}): " port || return 1
             [ -z "$port" ] && port=$default_port
         fi
         if ! is_valid_port "$port"; then
@@ -430,7 +430,7 @@ ask_uuid() {
     local current=${1:-} uuid
     while true; do
         if [[ -n "$current" ]]; then
-            read -r -p "UUID (回车保留): " uuid || return 1
+            read -r -p "UUID (当前: ${current}, 回车保留): " uuid || return 1
             [ -z "$uuid" ] && uuid=$current
         else
             read -r -p "UUID (回车生成): " uuid || return 1
@@ -453,10 +453,10 @@ ask_domain() {
     local current=${1:-} domain
     while true; do
         if [[ -n "$current" ]]; then
-            read -r -p "SNI (回车保留): " domain || return 1
+            read -r -p "SNI 伪装域名 (当前: ${current}, 回车保留): " domain || return 1
             [ -z "$domain" ] && domain=$current
         else
-            read -r -p "SNI [${default_sni}]: " domain || return 1
+            read -r -p "SNI 伪装域名 (默认: ${default_sni}): " domain || return 1
             [ -z "$domain" ] && domain=$default_sni
         fi
         if is_valid_domain "$domain"; then break; else error "域名格式无效，请重新输入。"; fi
