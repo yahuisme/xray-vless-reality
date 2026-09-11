@@ -451,6 +451,7 @@ ask_uuid() {
 
 ask_domain() {
     local current=${1:-} domain
+    info "SNI 目标须从服务器可达、支持 TLS 1.3（443）；无需自有域名或证书。" >&2
     while true; do
         if [[ -n "$current" ]]; then
             read -r -p "SNI 伪装域名 (当前: ${current}, 回车保留): " domain || return 1
@@ -475,6 +476,7 @@ install_xray() {
         if [[ ! $confirm =~ ^[yY]$ ]]; then info "操作已取消。"; return; fi
     fi
     info "开始配置 Xray VLESS-Reality..."
+    info "客户端须支持 VLESS + REALITY + Vision（xtls-rprx-vision）；请自行放行节点端口。"
     local current_port="" port uuid domain
     # 重装场景：读取现有配置端口，同端口重装时豁免占用检查
     [[ -f "$xray_config_path" ]] && current_port=$(jq -r '.inbounds[0].port // empty' "$xray_config_path" 2>/dev/null || true)
@@ -568,7 +570,8 @@ uninstall_xray() {
         info "Xray 未安装，无需卸载。"
         return 0
     fi
-    if ! read -r -p "您确定要卸载 Xray 吗？这将删除所有相关文件。[Y/n]: " confirm; then
+    warning "将完整卸载 Xray，清除配置、备份、日志及节点信息，含自定义内容。"
+    if ! read -r -p "您确定要卸载 Xray 吗？[Y/n]（回车确认）: " confirm; then
         info "检测到输入结束，卸载已取消。"
         return
     fi
@@ -617,6 +620,7 @@ modify_config() {
     private_key=$(jq -r '.inbounds[0].streamSettings.realitySettings.privateKey' "$xray_config_path")
     public_key=$(jq -r '.inbounds[0].streamSettings.realitySettings.publicKey' "$xray_config_path")
 
+    info "仅修改首个入站端口、首个用户 UUID 和 SNI（同步目标为该域名:443）；其余保留。"
     info "请输入新配置，直接回车则保留当前值。"
     local port uuid domain
     port=$(ask_port "$current_port") || return 1
@@ -693,6 +697,7 @@ view_subscription_info() {
     color_printf '%b\n' "$yellow 地址: $cyan$ip$none"
     color_printf '%b\n' "$yellow 端口: $cyan$port$none"
     color_printf '%b\n' "$yellow UUID: $cyan$uuid$none"
+    color_printf '%b\n' "$yellow 传输: tcp | 安全: reality | VLESS encryption: none$none"
     color_printf '%b\n' "$yellow 流控: $cyan xtls-rprx-vision$none"
     color_printf '%b\n' "$yellow 指纹: $cyan chrome$none"
     color_printf '%b\n' "$yellow SNI: $cyan$domain$none"
@@ -891,6 +896,10 @@ show_help() {
   --uuid <UUID>    用户 UUID (默认: 自动随机生成)
   --sni <域名>     SNI 伪装域名 (默认: www.sega.com)
   -h, --help       显示此帮助信息
+
+使用 VLESS + REALITY + Vision（xtls-rprx-vision），客户端须支持此组合。
+SNI 是服务器可达、支持 TLS 1.3 的目标域名（端口 443），无需自有域名或证书。
+安装 / 重装覆盖整个 Xray 配置；请自行放行节点端口。
 
 示例:
   # 交互式管理菜单
