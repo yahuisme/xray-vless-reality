@@ -3,13 +3,13 @@
 # ==============================================================================
 # Xray VLESS-Reality 极简一键安装脚本
 # 系统支持: Debian 10+ / Ubuntu 20.04+
-# 版本: v26.09.11
+# 版本: v26.09.27
 # ==============================================================================
 
 set -euo pipefail
 
 # --- 全局常量定义 ---
-readonly SCRIPT_VERSION="v26.09.11"
+readonly SCRIPT_VERSION="v26.09.27"
 readonly xray_config_path="/usr/local/etc/xray/config.json"
 readonly xray_binary_path="/usr/local/bin/xray"
 readonly xray_install_script_url="https://raw.githubusercontent.com/XTLS/Xray-install/e741a4f56d368afbb9e5be3361b40c4552d3710d/install-release.sh"
@@ -26,6 +26,7 @@ readonly magenta=$'\033[95m' cyan=$'\033[96m' none=$'\033[0m'
 # --- 全局变量 ---
 xray_status_info=""
 readonly link_file="/root/xray_vless_reality_link.txt"
+readonly recovery_root="/var/lib/xray-vless-reality"
 
 
 # --- 辅助函数 ---
@@ -158,25 +159,22 @@ is_valid_port() {
     [[ "$port" =~ ^[1-9][0-9]{0,4}$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]
 }
 
-# 新增：检查端口是否被占用
+# 返回 0=占用、1=空闲、2=查询失败；只有完整查询成功才能认定空闲。
 is_port_in_use() {
-    local port=$1 port_in_use=false
+    local port=$1 tcp udp sockets
     if command -v ss >/dev/null 2>&1; then
-        if ss -H -ltn "sport = :$port" 2>/dev/null | grep -q . || \
-           ss -H -lun "sport = :$port" 2>/dev/null | grep -q .; then
-            port_in_use=true
+        if tcp=$(ss -H -ltn "sport = :$port" 2>/dev/null) &&
+           udp=$(ss -H -lun "sport = :$port" 2>/dev/null); then
+            [[ -n $tcp || -n $udp ]] && return 0
+            return 1
         fi
     fi
-    # ss 不可用或版本过旧（iproute2 < 4.9 无 -H，调用失败）时回退 netstat，避免静默跳过检查
-    if [[ "$port_in_use" == false ]] && command -v netstat >/dev/null 2>&1; then
-        if netstat -tuln 2>/dev/null | awk -v p=":$port" '$4 ~ p"$" || $4 ~ p" " {found=1} END {exit !found}'; then
-            port_in_use=true
-        fi
+    if command -v netstat >/dev/null 2>&1 && sockets=$(netstat -tuln 2>/dev/null); then
+        awk -v p=":$port" '$4 ~ p"$" {found=1} END {exit !found}' <<< "$sockets"
+        return $?
     fi
-    if [[ "$port_in_use" == true ]]; then
-        return 0
-    fi
-    return 1
+    error "无法查询端口占用（ss/netstat 失败），已停止操作。"
+    return 2
 }
 
 # 增强的UUID验证函数
@@ -228,9 +226,21 @@ apply_config_permissions() {
     fi
 }
 
+# 跨菜单子进程保留失败基准，必须先人工恢复/核对再移走 pending。
+check_pending_recovery() {
+    if [[ -e $recovery_root/pending || -L $recovery_root/pending ]]; then
+        error "存在未完成恢复，请先检查并恢复 $recovery_root/pending；确认后移走该目录再操作。"
+        return 1
+    fi
+}
+
 # 每次操作独立快照；恢复失败时保留目录，绝不借用旧 .bak。
 backup_state() {
-    backup_dir=$(mktemp -d "${TMPDIR:-/tmp}/xray-recovery.XXXXXX") || return 1
+    check_pending_recovery || return 1
+    install -d -m 0700 "$recovery_root" || return 1
+    backup_dir="$recovery_root/pending"
+    mkdir -m 0700 -- "$backup_dir" || return 1
+    printf '%s\n' "${backup_paths[@]}" > "$backup_dir/paths" || return 1
     was_active=false
     systemctl is-active --quiet xray && was_active=true
     local i
@@ -245,7 +255,11 @@ backup_state() {
 
 restore_state() {
     [[ -d ${backup_dir:-} ]] || return 1
-    systemctl stop xray || return 1
+    if ! systemctl stop xray; then
+        # 下载失败可能尚未创建 unit；仅确认未加载且原本停止时允许清理。
+        [[ $was_active == false && $(systemctl show xray -p LoadState --value) == not-found ]] || return 1
+    fi
+    stop_residual_xray || return 1
     local i target
     for i in "${!backup_paths[@]}"; do
         target=${backup_paths[i]}
@@ -297,7 +311,12 @@ validate_config_args() {
     is_valid_port "$port" || return 1
     is_valid_uuid "$uuid" || return 1
     is_valid_domain "$domain" || return 1
-    [[ "$check_port" != true ]] || ! is_port_in_use "$port"
+    if [[ $check_port == true ]]; then
+        local status=0
+        is_port_in_use "$port" || status=$?
+        [[ $status == 1 ]] || return 1
+    fi
+    return 0
 }
 
 # --- 改进的系统兼容性检查 ---
@@ -376,13 +395,13 @@ pre_check() {
         exit 1
     fi
 
-    if ! command -v jq &>/dev/null || ! command -v curl &>/dev/null; then
-        info "检测到缺失的依赖 (jq/curl)，正在尝试自动安装..."
+    if ! command -v jq &>/dev/null || ! command -v curl &>/dev/null || ! command -v pgrep &>/dev/null; then
+        info "检测到缺失的依赖 (jq/curl/procps)，正在尝试自动安装..."
         local apt_log
         apt_log=$(mktemp)
-        (DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 update && DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y jq curl) >"$apt_log" 2>&1 || true
-        if ! command -v jq &>/dev/null || ! command -v curl &>/dev/null; then
-            error "依赖 (jq/curl) 自动安装失败。请手动运行 'apt update && apt install -y jq curl' 后重试。"
+        (DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 update && DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y jq curl procps) >"$apt_log" 2>&1 || true
+        if ! command -v jq &>/dev/null || ! command -v curl &>/dev/null || ! command -v pgrep &>/dev/null; then
+            error "依赖 (jq/curl/procps) 自动安装失败。请手动运行 'apt update && apt install -y jq curl procps' 后重试。"
             sed -n '1,20p' "$apt_log" >&2 || true
             rm -f "$apt_log"
             exit 1
@@ -417,9 +436,14 @@ ask_port() {
             error "端口无效，请输入一个1-65535之间的数字。"
             continue
         fi
-        if [[ -z "$current" || "$port" != "$current" ]] && is_port_in_use "$port"; then
-            error "端口 $port 已被占用，请选择其他端口。"
-            continue
+        if [[ -z "$current" || "$port" != "$current" ]]; then
+            local status=0
+            is_port_in_use "$port" || status=$?
+            case $status in
+                0) error "端口 $port 已被占用，请选择其他端口。"; continue ;;
+                1) ;;
+                *) return 1 ;;
+            esac
         fi
         break
     done
@@ -494,6 +518,7 @@ update_failed() {
 }
 
 update_xray() {
+    check_pending_recovery || return 1
     if [[ ! -f "$xray_binary_path" ]]; then error "错误: Xray 未安装，无法执行更新。请先选择安装选项。" && return; fi
     info "正在检查最新版本..."
     local current_version
@@ -542,6 +567,27 @@ update_xray() {
     success "Xray 更新成功！"
 }
 
+# 有界观察同一 MainPID/可执行文件连续存活；不代表网络可达。
+wait_xray_stable() {
+    local pid first_pid="" exe observed=0
+    for _ in {1..8}; do
+        if systemctl is-active --quiet xray; then
+            pid=$(systemctl show xray -p MainPID --value) || return 1
+            [[ $pid =~ ^[1-9][0-9]*$ ]] || return 1
+            exe=$(readlink "/proc/$pid/exe") || return 1
+            [[ $exe == "$xray_binary_path" ]] || return 1
+            [[ -z $first_pid || $pid == "$first_pid" ]] || return 1
+            first_pid=$pid
+            observed=$((observed + 1))
+            ((observed >= 4)) && return 0
+        elif [[ -n $first_pid ]]; then
+            return 1
+        fi
+        sleep 1
+    done
+    return 1
+}
+
 restart_xray() {
     if [[ ! -f "$xray_binary_path" ]]; then error "错误: Xray 未安装，无法重启。" && return 1; fi
     info "正在重启 Xray 服务..."
@@ -549,24 +595,68 @@ restart_xray() {
         error "错误: Xray 服务重启失败, 请使用菜单 5 查看日志检查具体原因。"
         return 1
     fi
-    sleep 1
-    for _ in {1..5}; do
-        systemctl is-active --quiet xray && break
-        sleep 1
-    done
-    if ! systemctl is-active --quiet xray; then
+    if ! wait_xray_stable; then
         error "错误: Xray 服务启动失败, 请使用菜单 5 查看日志检查具体原因。"
         return 1
     fi
     success "Xray 服务已成功重启！"
 }
 
+# 不依赖 unit/二进制是否仍存在；只接受托管路径（含已删除的 inode）。
+managed_xray_pids() {
+    local candidates status=0 pid exe
+    candidates=$(pgrep -x xray 2>/dev/null) || status=$?
+    case $status in
+        0) ;;
+        1) return 0 ;;
+        *) error "无法查询 Xray 进程，已停止操作。"; return 1 ;;
+    esac
+    for pid in $candidates; do
+        [[ $pid =~ ^[1-9][0-9]*$ ]] || return 1
+        if ! exe=$(readlink "/proc/$pid/exe"); then
+            [[ ! -d /proc/$pid ]] && continue
+            error "无法确认进程 $pid 的可执行文件。"; return 1
+        fi
+        if [[ $exe == "$xray_binary_path" || $exe == "$xray_binary_path (deleted)" ]]; then
+            printf '%s\n' "$pid"
+        fi
+    done
+}
+
+stop_residual_xray() {
+    local pids pid exe
+    pids=$(managed_xray_pids) || return 1
+    for pid in $pids; do
+        # 再次核对，避免向已复用的同名 PID 发送信号。
+        if ! exe=$(readlink "/proc/$pid/exe"); then
+            [[ ! -d /proc/$pid ]] && continue
+            return 1
+        fi
+        [[ $exe == "$xray_binary_path" || $exe == "$xray_binary_path (deleted)" ]] || continue
+        kill -TERM -- "$pid" || { error "无法停止 Xray 进程 $pid，未删除文件。"; return 1; }
+    done
+    for _ in {1..5}; do
+        pids=$(managed_xray_pids) || return 1
+        [[ -z $pids ]] && return 0
+        sleep 1
+    done
+    error "Xray 进程仍未退出，未删除文件。"
+    return 1
+}
+
 uninstall_xray() {
-    local xray_dir
+    check_pending_recovery || return 1
+    local xray_dir pids residue=false path
+    pids=$(managed_xray_pids) || return 1
     xray_dir=$(dirname "$xray_config_path")
-    if [[ ! -f "$xray_binary_path" && ! -d "$xray_dir" &&
-          ! -f "$xray_binary_backup_path" && ! -f "$link_file" &&
-          ! -f /etc/systemd/system/xray.service ]]; then
+    for path in "$xray_binary_path" "$xray_dir" "$xray_binary_backup_path" "$link_file" \
+        /usr/local/share/xray /var/log/xray /etc/logrotate.d/xray \
+        /etc/systemd/system/xray.service /etc/systemd/system/xray@.service \
+        /etc/systemd/system/xray.service.d /etc/systemd/system/xray@.service.d \
+        /etc/systemd/system/multi-user.target.wants/xray.service; do
+        if [[ -e $path || -L $path ]]; then residue=true; break; fi
+    done
+    if [[ $residue == false && -z $pids ]]; then
         info "Xray 未安装，无需卸载。"
         return 0
     fi
@@ -580,14 +670,24 @@ uninstall_xray() {
         return
     fi
     info "正在卸载 Xray..."
-    if [[ -f "$xray_binary_path" || -f /etc/systemd/system/xray.service ]]; then
+    if [[ -f /etc/systemd/system/xray.service ]] || systemctl is-active --quiet xray; then
+        systemctl stop xray || { error "Xray 服务停止失败，未删除文件。"; return 1; }
+        systemctl disable xray || { error "Xray 服务禁用失败，未删除文件。"; return 1; }
+    fi
+    stop_residual_xray || return 1
+    if [[ -f "$xray_binary_path" && -d "$xray_dir" &&
+          -f /etc/systemd/system/xray.service && -f /etc/systemd/system/xray@.service &&
+          -d /etc/systemd/system/xray.service.d && -d /etc/systemd/system/xray@.service.d ]]; then
         if ! execute_official_script remove --purge; then
             error "Xray 官方卸载失败！"
             return 1
         fi
     fi
+    stop_residual_xray || return 1
     # Also remove files created by this script and any temporary configs.
     rm -rf -- \
+        "$xray_binary_path" \
+        /etc/systemd/system/multi-user.target.wants/xray.service \
         "$xray_dir" "$xray_binary_backup_path" "$link_file" \
         "${xray_config_path}.tmp."* \
         /usr/local/share/xray /var/log/xray \
@@ -607,6 +707,7 @@ view_xray_log() {
 }
 
 modify_config() {
+    check_pending_recovery || return 1
     if [[ ! -f "$xray_config_path" ]]; then error "错误: Xray 未安装，无法修改配置。" && return; fi
     if ! validate_vless_config "$xray_config_path"; then
         error "当前配置不是有效的 VLESS-Reality 配置，无法修改。"
@@ -627,19 +728,20 @@ modify_config() {
     uuid=$(ask_uuid "$current_uuid") || return 1
     domain=$(ask_domain "$current_domain") || return 1
 
+    local backup_dir was_active
+    local -a backup_paths=("$xray_config_path" "${xray_config_path}.bak" "$link_file")
+    backup_state || return 1
     if ! write_config "$port" "$uuid" "$domain" "$private_key" "$public_key" modify; then
         error "配置写入失败，未重启 Xray。"
+        rollback_binary_and_service || return 1
         return 1
     fi
     if ! restart_xray; then
         warning "新配置未能启动，正在恢复旧配置..."
-        if restore_config_backup && restart_xray; then
-            error "新配置启动失败，已恢复旧配置。"
-        else
-            error "旧配置恢复失败，请手动检查 ${xray_config_path}.bak。"
-        fi
+        rollback_binary_and_service || return 1
         return 1
     fi
+    rm -rf -- "$backup_dir" || return 1
     success "配置修改成功！"
     view_subscription_info
 }
@@ -653,6 +755,12 @@ view_subscription_info() {
     
     local ip
     if ! ip=$(get_public_ip); then return 1; fi
+    local listen
+    listen=$(jq -r '.inbounds[0].listen // "::"' "$xray_config_path") || return 1
+    if [[ $ip == *:* && $listen != *:* ]]; then
+        error "公网地址为 IPv6，但当前 listen 不支持 IPv6；请检查监听配置。"
+        return 1
+    fi
 
     local uuid port domain public_key shortid
     uuid=$(jq -r '.inbounds[0].settings.clients[0].id // empty' "$xray_config_path")
@@ -718,17 +826,25 @@ write_config() {
             .inbounds[0].settings.clients[0].id=$uuid |
             if .inbounds[0].streamSettings.realitySettings.serverNames[0] != $domain then
                 .inbounds[0].streamSettings.realitySettings.serverNames[0]=$domain |
-                .inbounds[0].streamSettings.realitySettings.dest=($domain+":443")
+                .inbounds[0].streamSettings.realitySettings |=
+                    (if has("target") then .target=($domain+":443") | del(.dest)
+                     else .dest=($domain+":443") end)
             else . end' "$xray_config_path") || return 1
     else
+    local listen=0.0.0.0
+    if [[ -f /proc/net/if_inet6 && -r /proc/sys/net/ipv6/conf/all/disable_ipv6 ]] &&
+       [[ $(< /proc/sys/net/ipv6/conf/all/disable_ipv6) == 0 ]]; then
+        listen=::
+    fi
     config_content=$(jq -n \
+        --arg listen "$listen" \
         --argjson port "$port" \
         --arg uuid "$uuid" \
         --arg domain "$domain" \
         --arg private_key "$private_key" \
         --arg public_key "$public_key" \
         --arg shortid "$shortid" \
-    '{"log":{"loglevel":"warning"},"inbounds":[{"listen":"0.0.0.0","port":$port,"protocol":"vless","settings":{"clients":[{"id":$uuid,"flow":"xtls-rprx-vision"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"show":false,"dest":($domain+":443"),"xver":0,"serverNames":[$domain],"privateKey":$private_key,"publicKey":$public_key,"shortIds":[$shortid]}},"sniffing":{"enabled":true,"destOverride":["http","tls","quic"]}}],"outbounds":[{"protocol":"freedom","settings":{"domainStrategy":"UseIPv4v6"}}]}') || return 1
+    '{"log":{"loglevel":"warning"},"inbounds":[{"listen":$listen,"port":$port,"protocol":"vless","settings":{"clients":[{"id":$uuid,"flow":"xtls-rprx-vision"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"show":false,"dest":($domain+":443"),"xver":0,"serverNames":[$domain],"privateKey":$private_key,"publicKey":$public_key,"shortIds":[$shortid]}},"sniffing":{"enabled":true,"destOverride":["http","tls","quic"]}}],"outbounds":[{"protocol":"freedom","settings":{"domainStrategy":"UseIPv4v6"}}]}') || return 1
     fi
     if ! printf '%s\n' "$config_content" | jq -e 'type == "object"' >/dev/null 2>&1; then
         error "生成的 Xray JSON 配置无效。"
@@ -768,12 +884,20 @@ write_config() {
 }
 
 run_install() {
+    check_pending_recovery || return 1
+    if [[ ! -f /etc/systemd/system/xray.service ]] &&
+       [[ -e $xray_binary_path || -e $xray_config_path ||
+          -e /etc/systemd/system/xray@.service ||
+          -e /etc/systemd/system/xray.service.d || -e /etc/systemd/system/xray@.service.d ]]; then
+        error "缺少 Xray 主服务文件且存在残留，请先修复或卸载，未覆盖现有服务定义。"
+        return 1
+    fi
     local port=$1 uuid=$2 domain=$3
     local backup_dir was_active
     local -a backup_paths=("$xray_binary_path" /usr/local/share/xray/geoip.dat /usr/local/share/xray/geosite.dat
         "$xray_config_path" /etc/systemd/system/xray.service /etc/systemd/system/xray@.service
         /etc/systemd/system/xray.service.d /etc/systemd/system/xray@.service.d
-        /etc/systemd/system/multi-user.target.wants/xray.service)
+        /etc/systemd/system/multi-user.target.wants/xray.service "${xray_config_path}.bak")
     backup_state || return 1
     info "正在下载并安装 Xray 核心..."
     # --without-geodata: 官方 install 默认已含 geodata 下载，与下方

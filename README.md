@@ -4,7 +4,7 @@
 
 SNI 是 REALITY 目标域名，须从服务器可达并支持 TLS 1.3；脚本连接其 443 端口，无需自有域名或证书。
 
-当前版本：`v26.09.11`
+当前版本：`v26.09.27`
 
 ## 一键安装
 
@@ -42,4 +42,6 @@ bash <(curl -fsSL https://raw.githubusercontent.com/yahuisme/xray-vless-reality/
 
 卸载会清除整个 Xray 及其配置、备份、日志和节点信息，含自定义内容；确认提示回车即同意。
 
-重装会覆盖配置；修改仅调整首个 VLESS-Reality 入站的端口、首个用户 UUID 和 SNI，保留其他配置；更换 SNI 会同步目标为该域名:443。更新保留服务文件与原运行状态，失败恢复核心和 geodata；恢复失败会显示保留的恢复目录。请自行放行节点端口。
+重装会覆盖配置；修改仅调整首个 VLESS-Reality 入站的端口、首个用户 UUID 和 SNI，保留其他配置；更换 SNI 会同步有效目标为该域名:443。新配置在 IPv6 可用时默认双栈监听，否则使用 IPv4；修改保留用户的 listen。更新保留服务文件与原运行状态，失败恢复核心和 geodata。恢复失败会保留 `/var/lib/xray-vless-reality/pending`（`paths` 对应编号快照），并阻止后续安装、更新、修改或卸载；须先人工恢复/核对，再移走该目录。启动检查仅确认同一核心进程短时持续运行，不代表外网可达；请自行放行节点端口。
+
+隔离回归：`python3 tests/regression.py`（需 Bash、jq、GNU coreutils；不调用真实服务/包管理/进程终止命令）。可设置 `XRAY_TEST_BINARY=/path/to/xray`，增加官方核心 `x25519` 和 `run -test` 校验，不启动监听。
