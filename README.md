@@ -4,7 +4,7 @@
 
 ## 使用
 
-需要 **Debian/Ubuntu 及兼容系统、root、Bash、curl、systemd**；在交互终端运行：
+需要 **Debian/Ubuntu 及兼容系统、root、Bash、curl、systemd**；脚本会补装 jq、procps 和缺失的端口检测工具（ss/netstat 至少一种）。在交互终端运行：
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/yahuisme/xray-vless-reality/main/install.sh)
@@ -22,7 +22,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/yahuisme/xray-vless-reality/
 - 节点链接：`/root/xray_vless_reality_link.txt`，含连接凭据，请勿公开。
 - 日志：`journalctl -u xray -f --no-pager`，按 Ctrl+C 退出。
 - **安装 / 重装覆盖整个 Xray 配置，含自定义内容，请先备份；重装后重新导入节点。**
-- 修改仅调整首个 VLESS-Reality 入站的端口、首个用户 UUID 和 SNI，回车保留当前值；其他配置保留。更换 SNI 会同步目标为该域名的 443 端口，修改后更新客户端节点。
+- 修改仅调整首个 VLESS-Reality 入站的端口、首个用户 UUID 和 SNI，回车保留当前值；其他配置保留。更换 SNI 会同步目标为该域名的 443 端口，修改后更新客户端节点。旧配置仍可读取，写入时统一为 `users`、`method: raw`、`target`；服务端不保存客户端公钥，查看链接时由私钥派生，分享链接仍使用 `type=tcp`。
+- 已有 REALITY 配置含 `mldsa65Seed` 时，查看节点链接会用本机 Xray 派生验证公钥并导出 `pqv`；修改配置保留种子。默认不启用，客户端须支持该参数，派生失败时保留原链接。
 - 更新保留配置、服务文件及原运行状态，失败时尝试回滚。
 - **卸载清除整个 Xray、配置、备份、日志及节点信息，含自定义内容；确认时回车即同意。**
 

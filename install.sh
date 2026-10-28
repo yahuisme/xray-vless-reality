@@ -3,13 +3,13 @@
 # ==============================================================================
 # Xray VLESS-Reality 极简一键安装脚本
 # 系统支持: Debian 10+ / Ubuntu 20.04+
-# 版本: v26.09.27
+# 版本: v26.10.28
 # ==============================================================================
 
 set -euo pipefail
 
 # --- 全局常量定义 ---
-readonly SCRIPT_VERSION="v26.09.27"
+readonly SCRIPT_VERSION="v26.10.28"
 readonly xray_config_path="/usr/local/etc/xray/config.json"
 readonly xray_binary_path="/usr/local/bin/xray"
 readonly xray_install_script_url="https://raw.githubusercontent.com/XTLS/Xray-install/e741a4f56d368afbb9e5be3361b40c4552d3710d/install-release.sh"
@@ -65,6 +65,7 @@ is_valid_ipv4() {
     [[ "$ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || return 1
     local IFS=.
     for part in $ip; do
+        [[ $part == 0 || $part != 0* ]] || return 1
         ((10#$part <= 255)) || return 1
     done
 }
@@ -120,6 +121,28 @@ get_public_ip() {
     error "无法获取公网 IP 地址。" && return 1
 }
 
+normalize_official_writes() {
+    local script="$1" content needle rest
+    # shellcheck disable=SC2016 # 固定上游源码，仅匹配字面量，不展开变量。
+    local -a writes=(
+        '    install -m 755 "${TMP_DIRECTORY}/$NAME" "/usr/local/bin/$NAME"'
+        '    install -m 644 "${TMP_DIRECTORY}/$NAME" "${DAT_PATH}/$NAME"'
+        '  install_file xray'
+        '  install -d "$DAT_PATH"'
+        '  install -m 644 "${dir_tmp}"/${file_dlc} "${DAT_PATH}"/${file_site}'
+        '  install -m 644 "${dir_tmp}"/${file_ip} "${DAT_PATH}"/${file_ip}'
+    )
+    content=$(< "$script")
+    for needle in "${writes[@]}"; do
+        needle=$'\n'"$needle"$'\n'
+        [[ "$content" == *"$needle"* ]] || return 1
+        rest=$'\n'${content#*"$needle"}
+        [[ "$rest" != *"$needle"* ]] || return 1
+        content=${content/"$needle"/"${needle%$'\n'} || exit 1"$'\n'}
+    done
+    printf '%s\n' "$content" > "$script"
+}
+
 execute_official_script() {
     local script_file log_file result=0
     script_file=$(mktemp) || return 1
@@ -142,7 +165,11 @@ execute_official_script() {
         error "官方安装脚本末尾语义不匹配，已拒绝执行。"; return 1
     fi
     printf '%s\n' "${source_text/"$stopped_tail"/$'    if [[ "$XRAY_RUNNING" -eq \'1\' ]]; then start_xray; fi\n  else\n'}" > "$script_file" || return 1
-    bash "$script_file" "$@" >"$log_file" 2>&1 || result=$?
+    # 固定上游脚本未启用 errexit；仅保护必要写入与核心调用点。
+    normalize_official_writes "$script_file" || { error "官方安装脚本写入检查未匹配，已拒绝执行。"; return 1; }
+    # 限制上游环境变量，确保写入/清理不越过本脚本快照范围。
+    JSON_PATH="${xray_config_path%/*}" JSONS_PATH='' DAT_PATH=/usr/local/share/xray \
+        bash "$script_file" "$@" >"$log_file" 2>&1 || result=$?
     if (( result != 0 )); then
         error "Xray 官方安装脚本执行失败。"
         sed -n '1,30p' "$log_file" >&2 || true
@@ -213,10 +240,16 @@ restore_config_backup() {
 }
 
 apply_config_permissions() {
-    local config_file=${1:-$xray_config_path} service_user service_group
-    service_user=$(systemctl show xray -p User --value 2>/dev/null || true)
-    [[ -n "$service_user" && "$service_user" != "-" ]] || service_user=root
-    service_group=$(id -g -n "$service_user" 2>/dev/null || true)
+    local config_file=${1:-$xray_config_path} service_user service_group property
+    property=$(systemctl show xray -p User 2>/dev/null) || {
+        error "无法查询 Xray 服务用户，未改变配置权限。"; return 1;
+    }
+    [[ $property == User=* && $property != *$'\n'* ]] || {
+        error "Xray 服务用户查询结果无效。"; return 1;
+    }
+    service_user=${property#User=}
+    [[ -n $service_user ]] || service_user=root
+    service_group=$(id -g -n "$service_user" 2>/dev/null) || return 1
     if [[ "$service_user" != root && -n "$service_group" ]] && getent group "$service_group" >/dev/null; then
         chown "root:$service_group" "$config_file" || return 1
         chmod 640 "$config_file"
@@ -257,18 +290,36 @@ restore_state() {
     [[ -d ${backup_dir:-} ]] || return 1
     if ! systemctl stop xray; then
         # 下载失败可能尚未创建 unit；仅确认未加载且原本停止时允许清理。
-        [[ $was_active == false && $(systemctl show xray -p LoadState --value) == not-found ]] || return 1
+        local load_state
+        [[ $was_active == false ]] || return 1
+        load_state=$(systemctl show xray -p LoadState) || return 1
+        [[ $load_state == LoadState=not-found ]] || return 1
     fi
     stop_residual_xray || return 1
-    local i target
+    local i target failed=false
+    # 官方首次安装会 enable 新 unit；删除前必须清除包括运行时在内的启用链接。
+    for i in "${!backup_paths[@]}"; do
+        if [[ ${backup_paths[i]} == /etc/systemd/system/xray.service &&
+              ! -e $backup_dir/$i && ! -L $backup_dir/$i &&
+              -f /etc/systemd/system/xray.service ]]; then
+            systemctl disable xray || return 1
+            systemctl disable --runtime xray || return 1
+        fi
+    done
     for i in "${!backup_paths[@]}"; do
         target=${backup_paths[i]}
         if [[ -e $backup_dir/$i || -L $backup_dir/$i ]]; then
-            rm -rf -- "$target" && cp -a -- "$backup_dir/$i" "$target" || return 1
-        else
-            rm -rf -- "$target" || return 1
+            if ! { rm -rf -- "$target" && cp -a -- "$backup_dir/$i" "$target"; }; then
+                error "恢复文件失败：$target"
+                failed=true
+            fi
+        elif ! rm -rf -- "$target"; then
+            error "清理新增文件失败：$target"
+            failed=true
         fi
     done
+    # 尽量恢复其余独立文件，但任何一步失败都不得启动混合版本。
+    [[ $failed == false ]] || return 1
     systemctl daemon-reload || return 1
     if [[ $was_active == true ]]; then restart_xray || return 1; fi
 }
@@ -297,11 +348,10 @@ validate_vless_config() {
         (((.inbounds | type == "array" and length > 0) and
         (.inbounds[0].protocol == "vless") and
         (.inbounds[0].port | type == "number" and . >= 1 and . <= 65535) and
-        ((.inbounds[0].settings.clients[0].id // empty) | type == "string" and length > 0) and
+        (((.inbounds[0].settings.clients // .inbounds[0].settings.users)[0].id // empty) | type == "string" and length > 0) and
         ((.inbounds[0].streamSettings.realitySettings.serverNames[0] // empty) | type == "string" and length > 0) and
         (.inbounds[0].streamSettings.security == "reality") and
         ((.inbounds[0].streamSettings.realitySettings.privateKey // empty) | type == "string" and length > 0) and
-        (.inbounds[0].streamSettings.realitySettings.publicKey as $key | $key == null or ($key | type == "string" and test("^[A-Za-z0-9_-]{43}$"))) and
         ((.inbounds[0].streamSettings.realitySettings.shortIds[0] // empty) | type == "string" and length > 0)) // false)
     ' "$config_file" >/dev/null 2>&1
 }
@@ -370,7 +420,7 @@ check_system_compatibility() {
     info "检测到系统: ${distro_name:-unknown} ${distro_version:-unknown}"
 
     # 检查关键命令是否存在
-    local required_commands=("systemctl" "awk" "grep" "sed" "ss" "ps" "mktemp" "install" "journalctl" "sha256sum")
+    local required_commands=("systemctl" "awk" "grep" "sed" "mktemp" "install" "journalctl" "sha256sum")
     local missing_commands=()
     for cmd in "${required_commands[@]}"; do
         if ! command -v "$cmd" &>/dev/null; then
@@ -395,13 +445,21 @@ pre_check() {
         exit 1
     fi
 
-    if ! command -v jq &>/dev/null || ! command -v curl &>/dev/null || ! command -v pgrep &>/dev/null; then
-        info "检测到缺失的依赖 (jq/curl/procps)，正在尝试自动安装..."
+    local -a dependencies=()
+    command -v jq &>/dev/null || dependencies+=(jq)
+    command -v curl &>/dev/null || dependencies+=(curl)
+    command -v pgrep &>/dev/null || dependencies+=(procps)
+    if ! command -v ss &>/dev/null && ! command -v netstat &>/dev/null; then
+        dependencies+=(iproute2)
+    fi
+    if ((${#dependencies[@]})); then
+        info "检测到缺失的依赖 (${dependencies[*]})，正在尝试自动安装..."
         local apt_log
-        apt_log=$(mktemp)
-        (DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 update && DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y jq curl procps) >"$apt_log" 2>&1 || true
-        if ! command -v jq &>/dev/null || ! command -v curl &>/dev/null || ! command -v pgrep &>/dev/null; then
-            error "依赖 (jq/curl/procps) 自动安装失败。请手动运行 'apt update && apt install -y jq curl procps' 后重试。"
+        apt_log=$(mktemp) || return 1
+        (DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 update && DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=600 install -y "${dependencies[@]}") >"$apt_log" 2>&1 || true
+        if ! command -v jq &>/dev/null || ! command -v curl &>/dev/null || ! command -v pgrep &>/dev/null ||
+           { ! command -v ss &>/dev/null && ! command -v netstat &>/dev/null; }; then
+            error "依赖自动安装失败。请手动运行 'apt update && apt install -y ${dependencies[*]}' 后重试。"
             sed -n '1,20p' "$apt_log" >&2 || true
             rm -f "$apt_log"
             exit 1
@@ -572,8 +630,9 @@ wait_xray_stable() {
     local pid first_pid="" exe observed=0
     for _ in {1..8}; do
         if systemctl is-active --quiet xray; then
-            pid=$(systemctl show xray -p MainPID --value) || return 1
-            [[ $pid =~ ^[1-9][0-9]*$ ]] || return 1
+            pid=$(systemctl show xray -p MainPID) || return 1
+            [[ $pid =~ ^MainPID=[1-9][0-9]*$ ]] || return 1
+            pid=${pid#MainPID=}
             exe=$(readlink "/proc/$pid/exe") || return 1
             [[ $exe == "$xray_binary_path" ]] || return 1
             [[ -z $first_pid || $pid == "$first_pid" ]] || return 1
@@ -716,10 +775,11 @@ modify_config() {
     info "读取当前配置..."
     local current_port current_uuid current_domain private_key public_key
     current_port=$(jq -r '.inbounds[0].port' "$xray_config_path")
-    current_uuid=$(jq -r '.inbounds[0].settings.clients[0].id' "$xray_config_path")
+    current_uuid=$(jq -r '(.inbounds[0].settings.clients // .inbounds[0].settings.users)[0].id' "$xray_config_path")
     current_domain=$(jq -r '.inbounds[0].streamSettings.realitySettings.serverNames[0]' "$xray_config_path")
     private_key=$(jq -r '.inbounds[0].streamSettings.realitySettings.privateKey' "$xray_config_path")
-    public_key=$(jq -r '.inbounds[0].streamSettings.realitySettings.publicKey' "$xray_config_path")
+    # 公钥仅用于客户端链接，服务端配置由私钥派生，不依赖旧 publicKey 字段。
+    public_key=""
 
     info "仅修改首个入站端口、首个用户 UUID 和 SNI（同步目标为该域名:443）；其余保留。"
     info "请输入新配置，直接回车则保留当前值。"
@@ -736,7 +796,7 @@ modify_config() {
         rollback_binary_and_service || return 1
         return 1
     fi
-    if ! restart_xray; then
+    if [[ $was_active == true ]] && ! restart_xray; then
         warning "新配置未能启动，正在恢复旧配置..."
         rollback_binary_and_service || return 1
         return 1
@@ -763,7 +823,7 @@ view_subscription_info() {
     fi
 
     local uuid port domain public_key shortid
-    uuid=$(jq -r '.inbounds[0].settings.clients[0].id // empty' "$xray_config_path")
+    uuid=$(jq -r '(.inbounds[0].settings.clients // .inbounds[0].settings.users)[0].id // empty' "$xray_config_path")
     port=$(jq -r '.inbounds[0].port // empty' "$xray_config_path")
     domain=$(jq -r '.inbounds[0].streamSettings.realitySettings.serverNames[0] // empty' "$xray_config_path")
     local private_key key_pair
@@ -775,6 +835,19 @@ view_subscription_info() {
     if [[ -z "$public_key" || -z "$shortid" ]]; then
         error "配置文件中缺少公钥或 ShortId 信息，可能是旧版配置，请重新安装以修复。"
         return 1
+    fi
+    local seed verify="" pqv_query="" signature_pair
+    seed=$(jq -er '.inbounds[0].streamSettings.realitySettings.mldsa65Seed // "" | select(type=="string")' "$xray_config_path") || return 1
+    if [[ -n $seed ]]; then
+        signature_pair=$("$xray_binary_path" mldsa65 -i "$seed") || {
+            error "无法派生 REALITY ML-DSA-65 验证公钥，未更新节点链接。"; return 1;
+        }
+        verify=$(awk '/^Verify:/ {print $2}' <<< "$signature_pair")
+        # 1952 字节的无填充 Base64URL 公钥为 2603 字符；末字符须规范编码。
+        [[ $verify =~ ^[A-Za-z0-9_-]{2602}[AEIMQUYcgkosw048]$ ]] || {
+            error "REALITY ML-DSA-65 验证公钥格式无效，未更新节点链接。"; return 1;
+        }
+        pqv_query="&pqv=$verify"
     fi
 
     local display_ip="$ip"
@@ -788,7 +861,7 @@ view_subscription_info() {
     domain_encoded=$(url_encode "$domain")
     public_key_encoded=$(url_encode "$public_key")
     shortid_encoded=$(url_encode "$shortid")
-    local vless_url="vless://${uuid}@${display_ip}:${port}?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&sni=${domain_encoded}&fp=chrome&pbk=${public_key_encoded}&sid=${shortid_encoded}#${link_name_encoded}"
+    local vless_url="vless://${uuid}@${display_ip}:${port}?flow=xtls-rprx-vision&encryption=none&type=tcp&security=reality&sni=${domain_encoded}&fp=chrome&pbk=${public_key_encoded}&sid=${shortid_encoded}${pqv_query}#${link_name_encoded}"
 
     umask 077
     local tmp_link
@@ -811,6 +884,7 @@ view_subscription_info() {
     color_printf '%b\n' "$yellow SNI: $cyan$domain$none"
     color_printf '%b\n' "$yellow 公钥: $cyan$public_key$none"
     color_printf '%b\n' "$yellow ShortId: $cyan$shortid$none"
+    [[ -z $verify ]] || color_printf '%b\n' "$yellow ML-DSA-65: 已导出 pqv，客户端须支持此参数。$none"
     draw_divider
     color_printf '%b\n\n%b\n' "$green 订阅链接 (已保存到 $link_file): $none" "$cyan${vless_url}${none}"
     draw_divider
@@ -823,12 +897,31 @@ write_config() {
     if [[ ${6:-} == modify ]]; then
         config_content=$(jq --argjson port "$port" --arg uuid "$uuid" --arg domain "$domain" '
             .inbounds[0].port=$port |
-            .inbounds[0].settings.clients[0].id=$uuid |
+            .inbounds[0].settings |= (.users=(.clients // .users) | del(.clients)) |
+            .inbounds[0].settings.users[0].id=$uuid |
+            .inbounds[0].streamSettings |=
+                (.method=(.method // .network // "raw") |
+                 if .method=="tcp" then .method="raw" else . end |
+                 if .rawSettings == null and .tcpSettings != null then .rawSettings=.tcpSettings else . end |
+                 del(.network, .tcpSettings)) |
+            .inbounds[0].streamSettings.realitySettings |=
+                (.target=(if .target!=null and .target!="" then .target else .dest end) |
+                 del(.dest, .publicKey, .password)) |
             if .inbounds[0].streamSettings.realitySettings.serverNames[0] != $domain then
                 .inbounds[0].streamSettings.realitySettings.serverNames[0]=$domain |
                 .inbounds[0].streamSettings.realitySettings |=
-                    (if has("target") then .target=($domain+":443") | del(.dest)
-                     else .dest=($domain+":443") end)
+                    (.target=($domain+":443"))
+            else . end |
+            if .outbounds != null then .outbounds |= map(
+                if .protocol == "freedom" then
+                    (if (.targetStrategy // "" | ascii_downcase) != "" and (.targetStrategy | ascii_downcase) != "asis" then .targetStrategy
+                     elif (.settings.targetStrategy // "") != "" then .settings.targetStrategy
+                     else .settings.domainStrategy // "" end) as $strategy |
+                    if ($strategy | ascii_downcase) != "" and ($strategy | ascii_downcase) != "asis" then
+                        .streamSettings.sockopt.domainStrategy = $strategy
+                    else . end |
+                    del(.targetStrategy, .settings.targetStrategy, .settings.domainStrategy)
+                else . end)
             else . end' "$xray_config_path") || return 1
     else
     local listen=0.0.0.0
@@ -842,9 +935,8 @@ write_config() {
         --arg uuid "$uuid" \
         --arg domain "$domain" \
         --arg private_key "$private_key" \
-        --arg public_key "$public_key" \
         --arg shortid "$shortid" \
-    '{"log":{"loglevel":"warning"},"inbounds":[{"listen":$listen,"port":$port,"protocol":"vless","settings":{"clients":[{"id":$uuid,"flow":"xtls-rprx-vision"}],"decryption":"none"},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"show":false,"dest":($domain+":443"),"xver":0,"serverNames":[$domain],"privateKey":$private_key,"publicKey":$public_key,"shortIds":[$shortid]}},"sniffing":{"enabled":true,"destOverride":["http","tls","quic"]}}],"outbounds":[{"protocol":"freedom","settings":{"domainStrategy":"UseIPv4v6"}}]}') || return 1
+    '{"log":{"loglevel":"warning"},"inbounds":[{"listen":$listen,"port":$port,"protocol":"vless","settings":{"users":[{"id":$uuid,"flow":"xtls-rprx-vision"}],"decryption":"none"},"streamSettings":{"method":"raw","security":"reality","realitySettings":{"show":false,"target":($domain+":443"),"xver":0,"serverNames":[$domain],"privateKey":$private_key,"shortIds":[$shortid]}},"sniffing":{"enabled":true,"destOverride":["http","tls","quic"]}}],"outbounds":[{"protocol":"freedom","settings":{},"streamSettings":{"sockopt":{"domainStrategy":"UseIPv4v6"}}}]}') || return 1
     fi
     if ! printf '%s\n' "$config_content" | jq -e 'type == "object"' >/dev/null 2>&1; then
         error "生成的 Xray JSON 配置无效。"
@@ -1073,6 +1165,13 @@ main() {
                 *) error "未知参数: $1"; show_help; exit 2 ;;
             esac
         done
+        # 格式校验不需要系统依赖；错误参数不得先更新 APT/安装软件。
+        if { [[ -n $port ]] && ! is_valid_port "$port"; } ||
+           { [[ -n $uuid ]] && ! is_valid_uuid "$uuid"; } ||
+           { [[ -n $domain ]] && ! is_valid_domain "$domain"; }; then
+            error "参数无效。请检查端口、UUID或SNI域名格式。"
+            exit 1
+        fi
         pre_check
         [[ -z "$port" ]] && port=$default_port
         [[ -z "$uuid" ]] && uuid=$(generate_uuid)

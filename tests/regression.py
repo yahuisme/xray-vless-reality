@@ -12,14 +12,21 @@ FUNCTIONS = '\n'.join(re.findall(r'^\w+\(\) \{.*?^\}', SOURCE, re.M | re.S))
 
 
 class Regression(unittest.TestCase):
-    def run_shell(self, body):
+    def run_shell(self, body, files=None):
         with tempfile.TemporaryDirectory(prefix='reality-test-', dir=os.environ.get('TMPDIR')) as tmp:
             root = Path(tmp)
+            for name, content in (files or {}).items():
+                (root / name).write_text(content)
             for name in ['usr/local/etc/xray', 'usr/local/bin', 'etc/systemd/system', 'proc', 'var/lib']:
                 (root / name).mkdir(parents=True)
-            functions = FUNCTIONS
+            # The normalizer only matches source text; its literal upstream paths
+            # must not be relocated with executable filesystem operations.
+            normalizer = re.search(r'^normalize_official_writes\(\) \{.*?^\}', FUNCTIONS, re.M | re.S)
+            functions = FUNCTIONS.replace(normalizer.group(), '') if normalizer else FUNCTIONS
             for prefix in ['/usr/local/', '/etc/systemd/', '/etc/logrotate.', '/var/log/', '/var/lib/', '/proc/']:
                 functions = functions.replace(prefix, str(root) + prefix)
+            if normalizer:
+                functions += '\n' + normalizer.group()
             prelude = r'''
 set -euo pipefail
 export TMPDIR="$ROOT"
@@ -33,7 +40,7 @@ default_port=443
 red= green= yellow= magenta= cyan= none=
 uuid=550e8400-e29b-41d4-a716-446655440000
 key=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
-systemctl() { printf '%s\n' "$*" >> "$ROOT/systemctl"; case "$1" in is-active) return 1;; *) return 0;; esac; }
+systemctl() { printf '%s\n' "$*" >> "$ROOT/systemctl"; case "$1" in is-active) return 1;; show) printf 'User=root\n';; *) return 0;; esac; }
 kill() { printf '%s\n' "$*" >> "$ROOT/kill"; return 90; }
 chown() { :; }
 pkill() { return 90; }
@@ -46,9 +53,317 @@ sleep() { :; }
 execute_official_script() { return 90; }
 '''
             # Override network/install boundaries after the extracted definitions.
-            script = functions + '\n' + prelude + '\n' + body
+            script = functions + '\nOFFICIAL_WRAPPER=$(declare -f execute_official_script)\n' + prelude + '\n' + body
             result = subprocess.run(['bash', '-c', script], env={**os.environ, 'ROOT': tmp}, text=True, capture_output=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_precheck_installs_missing_port_probe(self):
+        self.run_shell(r'''
+check_system_compatibility() { :; }
+command() {
+    if [[ $* == '-v ss' || $* == '-v netstat' ]]; then
+        [[ -e $ROOT/iproute2 ]]; return
+    fi
+    builtin command "$@"
+}
+apt-get() { printf '%s\n' "$*" >> "$ROOT/apt"; : > "$ROOT/iproute2"; }
+(pre_check) || exit 1
+[[ -e $ROOT/iproute2 && $(< "$ROOT/apt") == *iproute2* ]]
+''')
+
+    def test_partial_restore_keeps_other_recoverable_files(self):
+        self.run_shell(r'''
+printf old-core > "$xray_binary_path"
+printf old-config > "$xray_config_path"
+backup_paths=("$xray_binary_path" "$xray_config_path")
+backup_state
+printf new-core > "$xray_binary_path"
+printf new-config > "$xray_config_path"
+was_active=true
+restart_xray() { : > "$ROOT/restarted"; }
+cp() { [[ $* != *"$backup_dir/0"* ]] || return 1; command cp "$@"; }
+if rollback_binary_and_service; then exit 1; fi
+[[ $(< "$xray_config_path") == old-config ]]
+[[ -d $backup_dir && ! -e $ROOT/restarted ]]
+''')
+
+    def test_public_ip_cache_and_network_failure(self):
+        self.run_shell(r'''
+cache_file="$ROOT/usr/local/etc/xray/.public-ip"
+for value in 999.1.1.1 01.2.3.4 1.02.3.4 1.2.003.4 1.2.3.00 2001:::1 ::ffff:192.000.2.1; do
+    printf '%s' "$value" > "$cache_file"
+    curl() { return 1; }
+    if get_public_ip; then exit 1; fi
+done
+printf '2001:db8::1' > "$cache_file"
+[[ $(get_public_ip) == 2001:db8::1 ]]
+touch -d '2 days ago' "$cache_file"
+curl() { printf 198.51.100.8; }
+[[ $(get_public_ip) == 198.51.100.8 && $(< "$cache_file") == 198.51.100.8 ]]
+rm -rf "${cache_file%/*}"
+[[ $(get_public_ip 2>"$ROOT/stderr") == 198.51.100.8 && ! -s $ROOT/stderr ]]
+mkdir -p "$cache_file"
+[[ $(get_public_ip 2>"$ROOT/stderr") == 198.51.100.8 && ! -s $ROOT/stderr ]]
+curl() { [[ $* != *--ipv4* ]] || return 1; printf '2001:db8::2'; }
+[[ $(get_public_ip) == 2001:db8::2 ]]
+''')
+
+    def test_fresh_rollback_disables_unit_before_removal(self):
+        self.run_shell(r'''
+for failure in permanent runtime none; do
+    backup_paths=("$xray_binary_path" "$ROOT/etc/systemd/system/xray.service")
+    backup_state
+    was_active=false
+    printf new-core > "$xray_binary_path"
+    : > "$ROOT/etc/systemd/system/xray.service"
+    systemctl() {
+        printf '%s\n' "$*" >> "$ROOT/systemctl"
+        if [[ $1 == disable ]]; then
+            [[ -f $ROOT/etc/systemd/system/xray.service ]] || return 1
+            [[ $failure != permanent && ( $failure != runtime || $* != *--runtime* ) ]] || return 1
+        fi
+    }
+    status=0; (rollback_binary_and_service) || status=$?
+    if [[ $failure == none ]]; then
+        [[ $status == 0 && ! -e $xray_binary_path && ! -d $backup_dir ]]
+    else
+        [[ $status != 0 && -e $xray_binary_path && -e $ROOT/etc/systemd/system/xray.service && -d $backup_dir ]]
+    fi
+    [[ $(< "$ROOT/systemctl") == *disable* ]]
+    rm -rf "$backup_dir" "$xray_binary_path" "$ROOT/etc/systemd/system/xray.service" "$ROOT/systemctl"
+done
+''')
+
+    def test_restore_stop_and_reload_failure_never_restarts(self):
+        self.run_shell(r'''
+for failure in stop daemon-reload; do
+    printf old > "$xray_binary_path"
+    backup_paths=("$xray_binary_path")
+    backup_state
+    was_active=true
+    printf new > "$xray_binary_path"
+    restart_xray() { : > "$ROOT/restarted"; }
+    systemctl() { [[ $1 != "$failure" ]]; }
+    if rollback_binary_and_service; then exit 1; fi
+    [[ -d $backup_dir && ! -e $ROOT/restarted ]]
+    if [[ $failure == stop ]]; then [[ $(< "$xray_binary_path") == new ]];
+    else [[ $(< "$xray_binary_path") == old ]]; fi
+    rm -rf "$backup_dir"
+done
+''')
+
+    def test_netstat_only_precheck_skips_package_install(self):
+        self.run_shell(r'''
+command() {
+    [[ $* != '-v ss' ]] || return 1
+    builtin command "$@"
+}
+apt-get() { : > "$ROOT/apt-called"; return 1; }
+(pre_check) || exit 1
+[[ ! -e $ROOT/apt-called ]]
+''')
+
+    def test_missing_port_dependency_install_failure_aborts(self):
+        self.run_shell(r'''
+check_system_compatibility() { :; }
+command() {
+    [[ $* != '-v ss' && $* != '-v netstat' ]] || return 1
+    builtin command "$@"
+}
+apt-get() { return 1; }
+if (pre_check); then exit 1; fi
+''')
+
+    def test_official_installer_write_failure_is_not_success(self):
+        self.run_shell(r'''
+# Save the reviewed wrapper without invoking any downloaded installer.
+eval "${OFFICIAL_WRAPPER/execute_official_script /checked_installer }"
+declare -F checked_installer >/dev/null
+xray_install_script_url=https://fixture.invalid/script
+cat > "$ROOT/official-fixture" <<'FIXTURE'
+# Inert fixture with all six required pinned-source anchors.
+TMP_DIRECTORY=unused NAME=xray dir_tmp=unused file_dlc=dlc.dat file_site=geosite.dat file_ip=geoip.dat
+install() { [[ ${FAIL_WRITE:-yes} == no ]]; }
+install_file() {
+    install -m 755 "${TMP_DIRECTORY}/$NAME" "/usr/local/bin/$NAME"
+    install -m 644 "${TMP_DIRECTORY}/$NAME" "${DAT_PATH}/$NAME"
+}
+install_xray() {
+  install_file xray
+}
+install_geodata() {
+  [[ $JSON_PATH == "$ROOT/usr/local/etc/xray" && -z $JSONS_PATH && $DAT_PATH == "$ROOT/usr/local/share/xray" ]] || exit 81
+  install -d "$DAT_PATH"
+  install -m 644 "${dir_tmp}"/${file_dlc} "${DAT_PATH}"/${file_site}
+  install -m 644 "${dir_tmp}"/${file_ip} "${DAT_PATH}"/${file_ip}
+    printf 'later-success\n'
+    exit 0
+}
+main() {
+  if [[ $1 == install-geodata ]]; then install_geodata; fi
+  if [[ 0 == 1 ]]; then
+    [[ "$XRAY_RUNNING" -eq '1' ]] && start_xray
+  else
+    :
+  fi
+}
+main "$@"
+FIXTURE
+export JSON_PATH="$ROOT/foreign-config" JSONS_PATH="$ROOT/foreign-confdir" DAT_PATH="$ROOT/foreign-data"
+xray_install_script_sha256=$(sha256sum "$ROOT/official-fixture"); xray_install_script_sha256=${xray_install_script_sha256%% *}
+curl() { command cat "$ROOT/official-fixture"; }
+if checked_installer install-geodata; then exit 1; fi
+# The other wrapper boundaries must reject download/integrity/child failures too.
+curl() { printf partial; return 1; }
+if checked_installer install-geodata; then exit 1; fi
+curl() { command cat "$ROOT/official-fixture"; }
+xray_install_script_sha256=invalid
+if checked_installer install-geodata; then exit 1; fi
+export FAIL_WRITE=no
+xray_install_script_sha256=$(sha256sum "$ROOT/official-fixture"); xray_install_script_sha256=${xray_install_script_sha256%% *}
+checked_installer install-geodata || exit 1
+sed -i 's/exit 0/exit 29/' "$ROOT/official-fixture"
+xray_install_script_sha256=$(sha256sum "$ROOT/official-fixture"); xray_install_script_sha256=${xray_install_script_sha256%% *}
+if checked_installer install-geodata; then exit 1; fi
+''')
+
+    def test_pinned_official_write_guards(self):
+        fixture = os.environ.get('XRAY_TEST_OFFICIAL_SCRIPT')
+        if not fixture:
+            self.skipTest('set XRAY_TEST_OFFICIAL_SCRIPT to the verified pinned source')
+        upstream = Path(fixture).read_text()
+        # Integrity remains mandatory even for an optional local fixture.
+        import hashlib
+        match = re.search(r'readonly xray_install_script_sha256="([0-9a-f]+)"', SOURCE)
+        assert match is not None
+        digest = match.group(1)
+        self.assertEqual(hashlib.sha256(Path(fixture).read_bytes()).hexdigest(), digest)
+        match = re.search(r'^normalize_official_writes\(\) \{.*?^\}', FUNCTIONS, re.M | re.S)
+        assert match is not None
+        normalizer = match.group()
+        anchors = re.findall(r"^        '(.*)'$", normalizer, re.M)
+        self.assertEqual(len(anchors), 6)
+        checks = []
+        files = {'upstream': upstream}
+        for anchor in anchors:
+            for altered in (upstream.replace('\n' + anchor + '\n', '\n', 1),
+                            upstream.replace('\n' + anchor + '\n', '\n' + (anchor + '\n') * 2, 1)):
+                name = f'mismatch-{len(checks)}'
+                files[name] = altered
+                checks.append(f'if normalize_official_writes "$ROOT/{name}"; then exit 1; fi\n')
+        self.run_shell(r'''
+normalize_official_writes "$ROOT/upstream"
+bash -n "$ROOT/upstream"
+if normalize_official_writes "$ROOT/upstream"; then exit 1; fi
+# Extract only two reviewed writers; never execute/source the official entrypoint.
+python3 -c 'import re,sys; s=open(sys.argv[1]).read(); print("\n".join(re.findall(r"^(?:install_file|install_geodata)\(\) \{.*?^\}", s, re.M|re.S)))' "$ROOT/upstream" > "$ROOT/writers"
+eval "$(< "$ROOT/writers")"
+TMP_DIRECTORY="$ROOT"; DAT_PATH="$ROOT/data"; PROXY=''; XRAY_IS_INSTALLED_BEFORE_RUNNING_SCRIPT=1
+curl() { :; }; sha256sum() { :; }
+install() {
+    count=$(< "$ROOT/install-count"); count=$((count+1)); printf %s "$count" > "$ROOT/install-count"
+    [[ $count != "$fail_at" ]]
+}
+for name in xray geoip.dat; do
+    for fail_at in 0 1; do
+        printf 0 > "$ROOT/install-count"
+        status=0; (install_file "$name") || status=$?
+        [[ $(< "$ROOT/install-count") == 1 ]]
+        if [[ $fail_at == 0 ]]; then [[ $status == 0 ]]; else [[ $status != 0 ]]; fi
+    done
+done
+for fail_at in 0 1 2 3; do
+    printf 0 > "$ROOT/install-count"
+    status=0; (install_geodata) || status=$?
+    if [[ $fail_at == 0 ]]; then [[ $status == 0 && $(< "$ROOT/install-count") == 3 ]];
+    else [[ $status != 0 && $(< "$ROOT/install-count") == "$fail_at" ]]; fi
+done
+''' + '\n'.join(checks), files=files)
+
+    def test_new_config_uses_canonical_server_fields(self):
+        self.run_shell(r'''
+write_config 443 "$uuid" old.example "$key" "$key"
+jq -e '.inbounds[0] | .settings.users[0].id=="550e8400-e29b-41d4-a716-446655440000" and
+    (.settings | has("clients") | not) and .streamSettings.method=="raw" and
+    (.streamSettings | has("network") | not) and
+    .streamSettings.realitySettings.target=="old.example:443" and
+    (.streamSettings.realitySettings | has("dest") or has("publicKey") or has("password") | not)' "$xray_config_path"
+validate_vless_config "$xray_config_path"
+''')
+
+    def test_legacy_config_migrates_without_losing_custom_fields(self):
+        self.run_shell(r'''
+write_config 443 "$uuid" old.example "$key" "$key"
+jq --arg key "$key" '
+  .routing={custom:true} |
+  .inbounds[0].settings |= (.clients=.users | .clients[0].email="keep@example.com" |
+    .clients += [{id:"11111111-2222-3333-4444-555555555555",flow:"xtls-rprx-vision"}] |
+    .users=[{id:"ignored-by-core"}]) |
+  .outbounds[0].settings={domainStrategy:"UseIPv4v6",redirect:"127.0.0.1:80"} |
+  .inbounds[0].streamSettings |= (.network="tcp" | .tcpSettings={header:{type:"none"}} | del(.method)) |
+  .inbounds[0].streamSettings.realitySettings |=
+    (.dest=.target | del(.target) | .publicKey=$key | .custom="keep")' "$xray_config_path" > "$ROOT/legacy"
+mv "$ROOT/legacy" "$xray_config_path"
+validate_vless_config "$xray_config_path"
+ask_port() { printf 8443; }
+ask_uuid() { [[ $1 == 550e8400-e29b-41d4-a716-446655440000 ]] || return 1; printf '%s' "$1"; }
+ask_domain() { printf '%s' "$1"; }
+view_subscription_info() { :; }
+(modify_config) || exit 1
+validate_vless_config "$xray_config_path"
+jq -e '.outbounds[0].streamSettings.sockopt.domainStrategy=="UseIPv4v6" and .outbounds[0].settings.redirect=="127.0.0.1:80" and (.outbounds[0].settings|has("domainStrategy")|not) and .inbounds[0].streamSettings.rawSettings.header.type=="none" and (.inbounds[0].streamSettings|has("tcpSettings")|not)' "$xray_config_path"
+jq -e '.routing.custom and (.inbounds[0] |
+  .port==8443 and .settings.users[0].email=="keep@example.com" and
+  .settings.users[1].id=="11111111-2222-3333-4444-555555555555" and
+  (.settings|has("clients")|not) and .streamSettings.method=="raw" and
+  (.streamSettings|has("network")|not) and
+  .streamSettings.realitySettings.target=="old.example:443" and
+  .streamSettings.realitySettings.custom=="keep" and
+  (.streamSettings.realitySettings|has("dest") or has("publicKey")|not))' "$xray_config_path"
+''')
+
+    def test_modify_stopped_service_does_not_start(self):
+        self.run_shell(r'''
+write_config 443 "$uuid" old.example "$key" "$key"
+ask_port() { printf 8443; }
+ask_uuid() { printf '550e8400-e29b-41d4-a716-446655440000'; }
+ask_domain() { printf new.example; }
+restart_xray() { : > "$ROOT/restarted"; }
+view_subscription_info() { :; }
+(modify_config) || exit 1
+jq -e '.inbounds[0].port==8443' "$xray_config_path"
+[[ ! -e $ROOT/restarted && ! -d $recovery_root/pending ]]
+''')
+
+    def test_permission_query_failure_does_not_fallback_root(self):
+        self.run_shell(r'''
+printf original > "$xray_config_path"
+chmod 640 "$xray_config_path"
+for mode in failed malformed valid; do
+    systemctl() {
+        case $mode in
+            failed) return 1;;
+            malformed) printf 'garbage\n';;
+            valid) printf 'User=root\n';;
+        esac
+    }
+    status=0; (apply_config_permissions) || status=$?
+    if [[ $mode == valid ]]; then [[ $status == 0 && $(stat -c %a "$xray_config_path") == 600 ]];
+    else [[ $status != 0 && $(stat -c %a "$xray_config_path") == 640 ]]; fi
+done
+''')
+
+    def test_invalid_cli_values_do_not_install_dependencies(self):
+        self.run_shell(r'''
+pre_check() { : > "$ROOT/precheck-called"; }
+generate_uuid() { printf '550e8400-e29b-41d4-a716-446655440000'; }
+default_sni=old.example
+for args in '--port 0' '--uuid invalid' '--sni invalid'; do
+    # Only validated fixed test arguments are split here.
+    status=0; (main install $args) || status=$?
+    [[ $status != 0 && ! -e $ROOT/precheck-called ]]
+done
+''')
 
     def test_binary_only_uninstall_skips_official(self):
         self.run_shell(r'''
@@ -62,7 +377,7 @@ uninstall_xray
     def test_fresh_failure_before_unit_creation_can_retry(self):
         self.run_shell(r'''
 execute_official_script() { return 1; }
-systemctl() { case "$1" in stop|is-active) return 1;; show) printf 'not-found\n';; *) return 0;; esac; }
+systemctl() { [[ $* != *--value* ]] || return 91; case "$1" in stop|is-active) return 1;; show) printf 'LoadState=not-found\n';; *) return 0;; esac; }
 if (run_install 443 "$uuid" old.example); then exit 1; fi
 [[ ! -e $recovery_root/pending ]]
 if (run_install 443 "$uuid" old.example); then exit 1; fi
@@ -136,6 +451,43 @@ if (run_install 443 "$uuid" old.example); then exit 1; fi
 [[ $(< "${xray_config_path}.bak") == previous-backup ]]
 ''')
 
+    def test_real_core_mldsa65_link_export(self):
+        if not os.environ.get('XRAY_TEST_BINARY'):
+            self.skipTest('set XRAY_TEST_BINARY to a verified official core')
+        self.run_shell(r'''
+ln -s "$XRAY_TEST_BINARY" "$xray_binary_path"
+keys=$("$xray_binary_path" x25519)
+private=$(awk '/PrivateKey:/ {print $2}' <<< "$keys")
+public=$(awk '/^Password/ {print $NF}' <<< "$keys")
+pair=$("$xray_binary_path" mldsa65)
+seed=$(awk '/^Seed:/ {print $2}' <<< "$pair")
+verify=$(awk '/^Verify:/ {print $2}' <<< "$pair")
+write_config 443 "$uuid" old.example "$private" "$public"
+jq --arg seed "$seed" '.inbounds[0].streamSettings.realitySettings.mldsa65Seed=$seed' "$xray_config_path" > "$ROOT/config"
+mv "$ROOT/config" "$xray_config_path"
+get_public_ip() { printf '198.51.100.1\n'; }
+view_subscription_info
+[[ $(< "$link_file") == *"&pqv=$verify"* ]]
+write_config 8443 "$uuid" new.example "$private" "$public" modify
+"$xray_binary_path" run -test -config "$xray_config_path"
+[[ $(jq -r '.inbounds[0].streamSettings.realitySettings.mldsa65Seed' "$xray_config_path") == "$seed" ]]
+# Failed or malformed derivation must not replace the prior link.
+printf '%s\n' "$pair" > "$ROOT/pair"
+rm "$xray_binary_path"
+printf '%s\n' '#!/bin/bash' 'if [[ $1 == mldsa65 ]]; then cat "$ROOT/pair"; exit "${DERIVE_STATUS:-0}"; fi' 'exec "$XRAY_TEST_BINARY" "$@"' > "$xray_binary_path"
+chmod +x "$xray_binary_path"
+export DERIVE_STATUS=7
+printf previous-link > "$link_file"
+if view_subscription_info; then exit 1; fi
+[[ $(< "$link_file") == previous-link ]]
+export DERIVE_STATUS=0
+for invalid in short "${verify%?}B"; do
+    printf 'Verify: %s\n' "$invalid" > "$ROOT/pair"
+    if view_subscription_info; then exit 1; fi
+    [[ $(< "$link_file") == previous-link ]]
+done
+''')
+
     def test_real_core_config_and_ipv6_link(self):
         if not os.environ.get('XRAY_TEST_BINARY'):
             self.skipTest('set XRAY_TEST_BINARY to a verified official core')
@@ -149,13 +501,26 @@ printf 0 > "$ROOT/proc/sys/net/ipv6/conf/all/disable_ipv6"
 : > "$ROOT/proc/net/if_inet6"
 write_config 443 "$uuid" old.example "$private" "$public"
 "$xray_binary_path" run -test -config "$xray_config_path"
-jq '.inbounds[0].streamSettings.realitySettings.target="old.example:443"' "$xray_config_path" > "$ROOT/config"
+jq --arg public "$public" '.inbounds[0].settings |= (.clients=.users | del(.users)) |
+    .outbounds[0].settings={domainStrategy:"UseIPv4v6",redirect:"127.0.0.1:80"} |
+  .inbounds[0].streamSettings |= (.network="tcp" | .tcpSettings={header:{type:"none"}} | del(.method)) |
+    .inbounds[0].streamSettings.realitySettings |= (.dest=.target | del(.target) | .publicKey=$public)' "$xray_config_path" > "$ROOT/config"
 mv "$ROOT/config" "$xray_config_path"
-write_config 8443 "$uuid" new.example "$private" "$public" modify
+validate_vless_config "$xray_config_path"
 "$xray_binary_path" run -test -config "$xray_config_path"
 get_public_ip() { printf '2001:db8::1\n'; }
 view_subscription_info
+[[ $(< "$link_file") == *"vless://$uuid@[2001:db8::1]:443?"* && $(< "$link_file") == *"pbk=$public&"* ]]
+jq -e '.inbounds[0].settings | has("clients") and (has("users")|not)' "$xray_config_path"
+write_config 8443 "$uuid" new.example "$private" "$public" modify
+"$xray_binary_path" run -test -config "$xray_config_path"
+validate_vless_config "$xray_config_path"
+jq -e '.inbounds[0] | .settings.users[0].id!="" and
+    .streamSettings.method=="raw" and .streamSettings.realitySettings.target=="new.example:443" and
+    (.streamSettings.realitySettings | has("publicKey") or has("dest") | not)' "$xray_config_path"
+view_subscription_info
 [[ $(< "$link_file") == *'@[2001:db8::1]:8443?'* ]]
+[[ $(< "$link_file") == *'type=tcp&'* && $(< "$link_file") == *"pbk=$public&"* ]]
 [[ $(stat -c %a "$link_file") == 600 ]]
 ''')
 
@@ -198,7 +563,7 @@ ask_port() { printf 8443; }
 ask_uuid() { printf '550e8400-e29b-41d4-a716-446655440000'; }
 ask_domain() { printf new.example; }
 restart_xray() { return 1; }
-systemctl() { return 1; }
+systemctl() { case "$1" in is-active) return 0;; show) printf 'User=root\n';; *) return 1;; esac; }
 if (modify_config); then exit 1; fi
 [[ -d $recovery_root/pending ]]
 jq -e '.inbounds[0].port==443' "$recovery_root/pending/0"
@@ -257,11 +622,12 @@ ln -s /unrelated/xray "$ROOT/proc/124/exe"
 for mode in changing wrong dead stable; do
     printf 0 > "$ROOT/count"
     systemctl() {
+        [[ $* != *--value* ]] || return 91
         case "$1" in
             is-active) [[ $mode != dead || $(< "$ROOT/count") -lt 2 ]];;
             show)
                 n=$(< "$ROOT/count"); printf '%s' "$((n+1))" > "$ROOT/count"
-                case $mode in changing) printf '%s\n' "$((123+n))";; wrong) printf '124\n';; *) printf '123\n';; esac ;;
+                case $mode in changing) printf 'MainPID=%s\n' "$((123+n))";; wrong) printf 'MainPID=124\n';; *) printf 'MainPID=123\n';; esac ;;
             *) return 0;;
         esac
     }
